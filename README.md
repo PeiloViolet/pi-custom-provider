@@ -1,3 +1,7 @@
+# pi-custom-provider
+
+Independently maintained fork. The command remains `/custom-provider`. See [FORK.md](FORK.md) for installation and fixes. Original upstream documentation follows.
+
 # better-custom
 
 [中文文档](README.zh-CN.md)

@@ -1,3 +1,7 @@
+# pi-custom-provider
+
+本包是独立维护的 fork，命令仍为 `/custom-provider`。安装与修复说明见 [FORK.md](FORK.md)。下方保留上游说明。
+
 # better-custom
 
 [English](README.md)

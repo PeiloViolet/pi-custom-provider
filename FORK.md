@@ -1,11 +1,11 @@
-# Portable Pi fork
+# pi-custom-provider
 
 This fork preserves better-custom-provider 1.6.0's /custom-provider wizard and vendors model-probe 0.7.0 with a protocol authentication fix. Original MIT licenses remain in LICENSE and vendor/model-probe/LICENSE.
 
 ## Install on another computer
 
 ```powershell
-pi install git:github.com/PeiloViolet/better-custom-provider-fixed@v1.6.0-fix.1
+pi install git:github.com/PeiloViolet/pi-custom-provider@v1.6.0-fix.2
 ```
 
 Remove or disable the original better-custom-provider first (use `pi list` to find its exact source, then `pi remove <source>`), because both register /custom-provider. Restart Pi and run /custom-provider. Choose OpenAI-compatible, enter your endpoint and API key, then Auto-detect. Credentials stay on that computer; this repository contains no credentials or personal model configuration.
