@@ -1,0 +1,732 @@
+import { PROBE_CONCURRENCY, PROBE_TIMEOUT_MS } from "./types.ts";
+import type { ModelCostInfo, ModelProbeInfo, ProbeResult } from "./types.ts";
+import { buildProbeUrl, dedupe, firstFiniteNumber } from "./url.ts";
+
+// Retryable probe failure (timeout, network error, 404) — the caller retries
+// with the other base variant. Auth/client errors are not wrapped and abort
+// the probe immediately.
+class ProbeRetryable extends Error {}
+
+// Some gateways are quirky about where /models lives: some LiteLLM
+// deployments hang on /v1/models while serving /models at the root; stock
+// LiteLLM and many proxies serve both; One API / New API only mount /v1. Try
+// the base as given, then the variant with a trailing /v1 added or removed.
+//
+// Public hosts that don't listen on :80 at all make an explicit http:// URL
+// hang until the timeout, so for non-local http URLs we additionally try the
+// https:// variants as a fallback.
+function isLocalHost(hostname: string): boolean {
+	const lower = hostname.toLowerCase();
+	return (
+		lower === "localhost" ||
+		lower.endsWith(".local") ||
+		lower.startsWith("127.") ||
+		lower.startsWith("0.0.0.0") ||
+		lower.startsWith("10.") ||
+		lower.startsWith("192.168.") ||
+		/^172\.(1[6-9]|2\d|3[01])\./.test(lower) ||
+		lower === "[::1]"
+	);
+}
+
+function probeBaseVariants(baseUrl: string): string[] {
+	const trimmed = baseUrl.replace(/\/+$/, "");
+	try {
+		const url = new URL(trimmed);
+		let pathVariant: string | null = null;
+		if (url.pathname.endsWith("/v1")) {
+			url.pathname = url.pathname.slice(0, -3) || "/";
+			pathVariant = url.toString().replace(/\/+$/, "");
+		} else if (url.pathname === "" || url.pathname === "/") {
+			url.pathname = "/v1";
+			pathVariant = url.toString().replace(/\/+$/, "");
+		}
+		const variants = [trimmed, ...(pathVariant ? [pathVariant] : [])];
+		if (url.protocol === "http:" && !isLocalHost(url.hostname)) {
+			for (const v of [...variants]) {
+				const secure = new URL(v);
+				secure.protocol = "https:";
+				variants.push(secure.toString().replace(/\/+$/, ""));
+			}
+		}
+		return dedupe(variants);
+	} catch {
+		// not a URL — probe as given
+	}
+	return [trimmed];
+}
+
+async function fetchModelsList(baseUrl: string, headers: Record<string, string>): Promise<any> {
+	const probeUrl = buildProbeUrl(baseUrl);
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+	let response: Response;
+	try {
+		response = await fetch(probeUrl, { headers, signal: controller.signal });
+	} catch (error) {
+		if (controller.signal.aborted) {
+			throw new ProbeRetryable(`Probe timed out after ${PROBE_TIMEOUT_MS / 1000}s: ${probeUrl}`);
+		}
+		throw new ProbeRetryable(error instanceof Error ? error.message : String(error));
+	} finally {
+		clearTimeout(timer);
+	}
+	if (response.status === 404) {
+		throw new ProbeRetryable(`Probe failed (404 Not Found): ${probeUrl}`);
+	}
+	if (!response.ok) {
+		const body = await response.text().catch(() => "");
+		throw new Error(`Probe failed (${response.status} ${response.statusText})${body ? `: ${body.slice(0, 200)}` : ""}`);
+	}
+	// A 200 that isn't JSON means we hit a web UI, not the API (e.g. New API
+	// serving its console HTML at /models) — retry with the other base variant.
+	try {
+		return await response.json();
+	} catch {
+		throw new ProbeRetryable(`Probe got a non-JSON response (a web page, not an API): ${probeUrl}`);
+	}
+}
+
+/**
+ * Probe an OpenAI-compatible base URL for its model list. Adapts to gateways
+ * that mount /models at the server root instead of under /v1 (and vice versa);
+ * the base URL that actually answered is returned as `baseUrl`.
+ */
+export async function probeModels(baseUrl: string, apiKey?: string): Promise<ProbeResult> {
+	const headers: Record<string, string> = {
+		accept: "application/json",
+		"accept-encoding": "identity",
+	};
+	if (apiKey) {
+		headers.authorization = `Bearer ${apiKey}`;
+		// Google's native Gemini API authenticates with this header instead of
+		// Bearer. Other gateways can reject requests carrying both auth headers.
+		if (new URL(baseUrl).pathname.replace(/\/+$/, "").endsWith("/v1beta")) {
+			headers["x-goog-api-key"] = apiKey;
+		}
+	}
+
+	const variants = probeBaseVariants(baseUrl);
+	let json: any;
+	let resolvedBaseUrl = variants[0];
+	for (let i = 0; i < variants.length; i++) {
+		try {
+			json = await fetchModelsList(variants[i], headers);
+			resolvedBaseUrl = variants[i];
+			break;
+		} catch (error) {
+			// Retryable failures (timeout, network, 404) fall through to the other
+			// base variant; auth/client errors abort immediately.
+			if (!(error instanceof ProbeRetryable) || i === variants.length - 1) throw error;
+		}
+	}
+
+	// OpenAI shape: { data: [...] } (or a bare array). Google's native Gemini
+	// API answers { models: [{ name: "models/gemini-2.5-pro", ... }] }.
+	const rawModels = Array.isArray(json)
+		? json
+		: Array.isArray(json?.data)
+			? json.data
+			: Array.isArray(json?.models)
+				? json.models
+				: [];
+	const infoById = new Map<string, ModelProbeInfo>();
+	const ids = dedupe(
+		rawModels
+			.map((item: any) => {
+				// Gemini entries carry "name" (models/<id>) instead of "id".
+				const rawId =
+					typeof item?.id === "string" ? item.id : typeof item?.name === "string" ? item.name : "";
+				if (!rawId.trim()) return "";
+				const id = rawId.trim().replace(/^models\//, "");
+				// Some /models lists carry metadata inline (OpenRouter, OpenModels,
+				// Epithre, ...). Capture it so callers can show details without an
+				// extra round-trip per model.
+				const info = parseModelListItem(item);
+				if (info) infoById.set(id, info);
+				return id;
+			})
+			.filter(Boolean),
+	).sort((a, b) => a.localeCompare(b));
+
+	return { ids, infoById, baseUrl: resolvedBaseUrl };
+}
+
+// Protocol-level fallback limits, applied when the gateway, the catalog, and
+// the local rules all say nothing about a model's limits. Reasoning models
+// burn far more output than classic 4K-era defaults, so these follow what the
+// providers themselves document. Keyed by the pi model `api` flavor.
+export const API_FALLBACK_LIMITS: Record<string, { contextWindow: number; maxTokens: number }> = {
+	"anthropic-messages": { contextWindow: 200000, maxTokens: 32000 },
+	"google-generative-ai": { contextWindow: 1048576, maxTokens: 65536 },
+	"openai-completions": { contextWindow: 258000, maxTokens: 32000 },
+	"openai-responses": { contextWindow: 258000, maxTokens: 32000 },
+};
+
+// Community catalogs often publish degenerate limits for models whose real
+// output cap is unknown (maxTokens == contextWindow). Taken at face value that
+// squeezes the input budget to zero, so clamp the output to a conservative cap
+// and keep at least 3/4 of the window for input.
+export const MAX_OUTPUT_TOKEN_CAP = 32000;
+
+export function normalizeModelLimits(contextWindow: number, maxTokens: number): { contextWindow: number; maxTokens: number } {
+	if (contextWindow <= 0 || maxTokens < contextWindow) return { contextWindow, maxTokens };
+	return {
+		contextWindow,
+		maxTokens: Math.min(MAX_OUTPUT_TOKEN_CAP, Math.max(1, Math.floor(contextWindow / 4))),
+	};
+}
+
+// Field defaults applied when neither the gateway nor the local rules say
+// anything: reasoning on (most current models think), image and video input
+// off (opt-in). contextWindow has no default. Developer-role support is a
+// gateway-level probe and defaults to false as well (see developer-role.ts).
+export const MODEL_INFO_DEFAULTS = { image: false, video: false, reasoning: true } as const;
+
+// Fill still-unknown fields from MODEL_INFO_DEFAULTS, tagging them in
+// defaultedFields. Detected and local-rule values always win.
+export function applyModelDefaults(info: ModelProbeInfo | undefined): ModelProbeInfo {
+	const out: ModelProbeInfo = { ...(info ?? {}) };
+	const defaulted: NonNullable<ModelProbeInfo["defaultedFields"]> = [...(info?.defaultedFields ?? [])];
+	if (out.image === undefined) {
+		out.image = MODEL_INFO_DEFAULTS.image;
+		defaulted.push("image");
+	}
+	if (out.video === undefined) {
+		out.video = MODEL_INFO_DEFAULTS.video;
+		defaulted.push("video");
+	}
+	if (out.reasoning === undefined) {
+		out.reasoning = MODEL_INFO_DEFAULTS.reasoning;
+		defaulted.push("reasoning");
+	}
+	if (defaulted.length > 0) out.defaultedFields = defaulted;
+	return out;
+}
+
+// Human-readable list of the metadata fields actually present in a probe
+// result. Default-filled fields don't count — they carry no information.
+export function probeInfoSummary(info: ModelProbeInfo | undefined): string[] {
+	if (!info) return [];
+	const defaulted = new Set(info.defaultedFields ?? []);
+	const parts: string[] = [];
+	if (info.contextWindow !== undefined && !defaulted.has("contextWindow")) parts.push("context");
+	if (info.maxTokens !== undefined && !defaulted.has("maxTokens")) parts.push("maxTokens");
+	if (info.reasoning !== undefined && !defaulted.has("reasoning")) parts.push("reasoning");
+	if (info.image !== undefined && !defaulted.has("image")) parts.push("image");
+	if (info.video !== undefined && !defaulted.has("video")) parts.push("video");
+	if (info.cost !== undefined) parts.push("cost");
+	return parts;
+}
+
+// Build per-1M-token cost rates (pi / models.dev convention) from per-token
+// values (LiteLLM and OpenRouter publish per-token). Missing cache rates
+// default to 0, matching pi's builtin catalogs; an entry with neither input
+// nor output price carries no information and is skipped. Values are rounded
+// to 6 decimals so 4.4e-7 doesn't surface as 0.44000000000000006.
+function costFromPerToken(input?: number, output?: number, cacheRead?: number, cacheWrite?: number): ModelCostInfo | undefined {
+	if (input === undefined && output === undefined) return undefined;
+	const per1M = (v: number | undefined) => Math.round((v ?? 0) * 1e6 * 1e6) / 1e6;
+	return { input: per1M(input), output: per1M(output), cacheRead: per1M(cacheRead), cacheWrite: per1M(cacheWrite) };
+}
+
+// OpenRouter-style inline pricing on /models entries:
+// pricing: { prompt, completion, input_cache_read, input_cache_write } —
+// stringified USD per token.
+function parseInlinePricing(item: any): ModelCostInfo | undefined {
+	const pricing = item?.pricing;
+	if (!pricing || typeof pricing !== "object") return undefined;
+	const num = (key: string): number | undefined => {
+		const v = Number(pricing[key]);
+		return Number.isFinite(v) && pricing[key] !== undefined && pricing[key] !== null && pricing[key] !== "" ? v : undefined;
+	};
+	return costFromPerToken(num("prompt"), num("completion"), num("input_cache_read"), num("input_cache_write"));
+}
+
+// Whether a probe result carries anything worth surfacing (including gateway
+// endpoint types, which don't count as "detected metadata" for the summary).
+function hasProbeInfo(info: ModelProbeInfo | undefined): boolean {
+	if (!info) return false;
+	return probeInfoSummary(info).length > 0 || (info.endpointTypes !== undefined && info.endpointTypes.length > 0);
+}
+
+export function describeProbeInfo(info: ModelProbeInfo | undefined): string | undefined {
+	if (!info) return undefined;
+	const inferred = new Set(info.inferredFields ?? []);
+	const fromModelsDev = new Set(info.modelsDevFields ?? []);
+	const defaulted = new Set(info.defaultedFields ?? []);
+	const tag = (field: "contextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "cost") =>
+		inferred.has(field as any) ? " [local rules]" : fromModelsDev.has(field) ? " [models.dev]" : "";
+	const parts: string[] = [];
+	// Limit fields filled by the api fallback (tagged defaulted) carry no real
+	// information about the model — don't show them.
+	if (info.contextWindow !== undefined && !defaulted.has("contextWindow")) parts.push(`ctx ${info.contextWindow}${tag("contextWindow")}`);
+	if (info.maxTokens !== undefined && !defaulted.has("maxTokens")) parts.push(`max-out ${info.maxTokens}${tag("maxTokens")}`);
+	// Only values that differ from the defaults (image/video: false,
+	// reasoning: true) are worth showing — a model with default values gets
+	// no tag at all, even if the default was really detected (e.g. probed
+	// "no image input").
+	if (info.image === true) parts.push(`image${tag("image")}`);
+	if (info.video === true) parts.push(`video${tag("video")}`);
+	if (info.reasoning === false) parts.push(`no reasoning${tag("reasoning")}`);
+	else if (info.reasoning === true && info.alwaysThinking) parts.push(`reasoning (always on)${tag("reasoning")}`);
+	if (info.cost) parts.push(`$${info.cost.input}/$${info.cost.output} per 1M${tag("cost")}`);
+	if (info.endpointTypes && info.endpointTypes.length > 0) parts.push(info.endpointTypes.join("/"));
+	return parts.length > 0 ? parts.join(" • ") : undefined;
+}
+
+// One API / New API gateways (and their forks) attach extra model metadata
+// under "meta": { context_window, capabilities: { vision, reasoning, ... },
+// supports_vision, supports_reasoning }. Fills only fields that are still
+// unknown, so OpenRouter/OpenAI-style data wins when both exist.
+function parseGatewayMetaFields(source: any, info: ModelProbeInfo): void {
+	const meta = source?.meta;
+	if (!meta || typeof meta !== "object") return;
+	if (info.contextWindow === undefined) {
+		const contextWindow = firstFiniteNumber(meta, "context_window", "max_input_tokens");
+		if (contextWindow !== undefined) info.contextWindow = contextWindow;
+	}
+	if (info.maxTokens === undefined) {
+		const maxTokens = firstFiniteNumber(meta, "max_output_tokens", "max_tokens");
+		if (maxTokens !== undefined) info.maxTokens = maxTokens;
+	}
+	const capabilities = meta.capabilities;
+	if (capabilities && typeof capabilities === "object") {
+		if (info.image === undefined && typeof capabilities.vision === "boolean") info.image = capabilities.vision;
+		if (info.reasoning === undefined && typeof capabilities.reasoning === "boolean") info.reasoning = capabilities.reasoning;
+		if (info.reasoning === undefined && typeof capabilities.thinking === "boolean") info.reasoning = capabilities.thinking;
+	}
+	if (info.image === undefined && typeof meta.supports_vision === "boolean") info.image = meta.supports_vision;
+	if (info.reasoning === undefined && typeof meta.supports_reasoning === "boolean") info.reasoning = meta.supports_reasoning;
+}
+
+// Inline metadata carried by some /models list entries (OpenRouter, OpenModels,
+// Epithre, One API / New API, ...). Returns undefined when the entry is bare.
+function parseModelListItem(item: any): ModelProbeInfo | undefined {
+	if (!item || typeof item !== "object") return undefined;
+	const info: ModelProbeInfo = {};
+
+	const contextWindow = firstFiniteNumber(item, "context_length", "context_window", "max_input_tokens", "inputTokenLimit");
+	if (contextWindow !== undefined) info.contextWindow = contextWindow;
+	// OpenRouter-style: top_provider.max_completion_tokens; others publish
+	// max_output_tokens / outputTokenLimit directly.
+	const maxTokens = firstFiniteNumber(item, "max_output_tokens", "max_completion_tokens", "outputTokenLimit");
+	if (maxTokens !== undefined) info.maxTokens = maxTokens;
+	else if (typeof item.top_provider === "object" && item.top_provider !== null) {
+		const top = firstFiniteNumber(item.top_provider, "max_completion_tokens");
+		if (top !== undefined) info.maxTokens = top;
+	}
+	if (typeof item.reasoning === "boolean") info.reasoning = item.reasoning;
+
+	const modalities = Array.isArray(item.architecture?.input_modalities)
+		? item.architecture.input_modalities
+		: Array.isArray(item.modalities)
+			? item.modalities
+			: undefined;
+	if (modalities) {
+		info.image = modalities.includes("image");
+		info.video = modalities.includes("video");
+	}
+
+	if (Array.isArray(item.capabilities)) {
+		if (info.reasoning === undefined) info.reasoning = item.capabilities.includes("thinking") || item.capabilities.includes("reasoning");
+		if (info.image === undefined) info.image = item.capabilities.includes("vision");
+	}
+
+	// New API's /v1/models entries carry supported_endpoint_types
+	// (e.g. ["chat"] or ["chat", "embeddings"]).
+	if (Array.isArray(item.supported_endpoint_types)) {
+		const types = item.supported_endpoint_types.filter((t: unknown): t is string => typeof t === "string");
+		if (types.length > 0) info.endpointTypes = types;
+	}
+
+	const cost = parseInlinePricing(item);
+	if (cost) info.cost = cost;
+
+	parseGatewayMetaFields(item, info);
+
+	return hasProbeInfo(info) ? info : undefined;
+}
+
+// Metadata from GET /models/{id} (OpenAI and compatible servers).
+function parseOpenAIModelDetail(json: any): ModelProbeInfo | undefined {
+	if (!json || typeof json !== "object") return undefined;
+	const info: ModelProbeInfo = {};
+
+	// inputTokenLimit: Google's native Gemini per-model detail.
+	const contextWindow = firstFiniteNumber(json, "context_window", "inputTokenLimit");
+	if (contextWindow !== undefined) info.contextWindow = contextWindow;
+	const maxTokens = firstFiniteNumber(json, "max_output_tokens", "outputTokenLimit");
+	if (maxTokens !== undefined) info.maxTokens = maxTokens;
+
+	const capabilities = json.capabilities;
+	if (capabilities && typeof capabilities === "object") {
+		if (
+			capabilities.vision &&
+			typeof capabilities.vision === "object" &&
+			typeof capabilities.vision.supported === "boolean"
+		) {
+			info.image = capabilities.vision.supported;
+		}
+		const reasoning = capabilities.reasoning;
+		if (reasoning && typeof reasoning === "object") {
+			const type = typeof reasoning.type === "string" ? reasoning.type : "";
+			if (type === "none") {
+				info.reasoning = false;
+			} else if (type === "minimal") {
+				// Thinking exists but cannot be turned off.
+				info.reasoning = true;
+				info.alwaysThinking = true;
+			} else if (type === "effort") {
+				info.reasoning = true;
+				if (Array.isArray(reasoning.effort_options)) {
+					info.effortOptions = reasoning.effort_options.filter((option: unknown): option is string => typeof option === "string");
+				}
+			}
+		}
+	}
+
+	// One API / New API gateways may also carry the extra "meta" object on
+	// GET /models/{id} responses.
+	parseGatewayMetaFields(json, info);
+
+	return probeInfoSummary(info).length > 0 ? info : undefined;
+}
+
+// Metadata from a LiteLLM proxy's GET /model_group/info — like /model/info
+// but mounted at the server root (/v1/model_group/info is 404), keyed by
+// model_group, with per-group capability fields.
+function parseModelGroupInfo(json: any, out: Map<string, ModelProbeInfo>): boolean {
+	if (!json || typeof json !== "object") return false;
+	const entries = Array.isArray(json) ? json : Array.isArray(json.data) ? json.data : [];
+	if (entries.length === 0) return false;
+	let found = false;
+	for (const entry of entries) {
+		if (!entry || typeof entry !== "object") continue;
+		const name = typeof entry.model_group === "string" ? entry.model_group.trim() : "";
+		if (!name) continue;
+		const parsed: ModelProbeInfo = {};
+		const contextWindow = firstFiniteNumber(entry, "max_input_tokens", "context_window");
+		if (contextWindow !== undefined) parsed.contextWindow = contextWindow;
+		const maxTokens = firstFiniteNumber(entry, "max_output_tokens", "max_tokens");
+		if (maxTokens !== undefined) parsed.maxTokens = maxTokens;
+		if (typeof entry.supports_vision === "boolean") parsed.image = entry.supports_vision;
+		if (typeof entry.supports_reasoning === "boolean") parsed.reasoning = entry.supports_reasoning;
+		if (probeInfoSummary(parsed).length > 0) {
+			out.set(name, parsed);
+			found = true;
+		}
+	}
+	return found;
+}
+
+// Fetch LiteLLM /model_group/info (requires an api key). The endpoint lives at
+// the server root, so we try the baseUrl's origin first, then the baseUrl.
+export async function enrichLiteLLMModelGroupInfo(
+	baseUrl: string,
+	apiKey: string | undefined,
+): Promise<Map<string, ModelProbeInfo>> {
+	const out = new Map<string, ModelProbeInfo>();
+	if (!apiKey) return out;
+	const headers: Record<string, string> = { accept: "application/json", authorization: `Bearer ${apiKey}` };
+
+	let roots: string[];
+	try {
+		roots = [new URL(baseUrl).origin, baseUrl];
+	} catch {
+		roots = [baseUrl];
+	}
+	for (const root of roots) {
+		try {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+			const response = await fetch(`${root.replace(/\/+$/, "")}/model_group/info`, {
+				headers,
+				signal: controller.signal,
+			});
+			clearTimeout(timer);
+			if (!response.ok) continue;
+			const json = await response.json().catch(() => null);
+			if (parseModelGroupInfo(json, out)) return out;
+		} catch {
+			// try the next root
+		}
+	}
+	return out;
+}
+
+// New API-style site model catalog: GET {site}/api/models/public (no auth
+// needed) returns authoritative context_window for every published model —
+// more reliable than LiteLLM's /model/info (which often has max_input_tokens
+// null).
+function parsePublicModelList(json: any, out: Map<string, ModelProbeInfo>): boolean {
+	if (!Array.isArray(json)) return false;
+	let found = false;
+	for (const entry of json) {
+		if (!entry || typeof entry !== "object") continue;
+		const name =
+			typeof entry.litellm_model_name === "string"
+				? entry.litellm_model_name.trim()
+				: typeof entry.model_name === "string"
+					? entry.model_name.trim()
+					: typeof entry.id === "string"
+						? entry.id.trim()
+						: "";
+		if (!name) continue;
+		if (entry.status === "draft" || entry.status === "archived" || entry.is_visible === false) continue;
+		const parsed: ModelProbeInfo = {};
+		const contextWindow = firstFiniteNumber(entry, "context_window", "contextWindow", "max_input_tokens");
+		if (contextWindow !== undefined) parsed.contextWindow = contextWindow;
+		const maxTokens = firstFiniteNumber(entry, "max_output_tokens", "maxTokens", "max_tokens");
+		if (maxTokens !== undefined) parsed.maxTokens = maxTokens;
+		// Best effort: some catalogs also publish capability flags.
+		if (typeof entry.supports_vision === "boolean") parsed.image = entry.supports_vision;
+		if (typeof entry.supports_reasoning === "boolean") parsed.reasoning = entry.supports_reasoning;
+		if (probeInfoSummary(parsed).length > 0) {
+			out.set(name, parsed);
+			found = true;
+		}
+	}
+	return found;
+}
+
+// Fetch the site's public model catalog. The catalog lives on the site root,
+// not the api host — for api.llm.example.edu.cn we also try llm.example.edu.cn.
+export async function enrichPublicModelInfo(baseUrl: string): Promise<Map<string, ModelProbeInfo>> {
+	const out = new Map<string, ModelProbeInfo>();
+	const roots = new Set<string>();
+	try {
+		const url = new URL(baseUrl);
+		roots.add(url.origin);
+		// api.llm.example.edu.cn -> llm.example.edu.cn (same domain, site root)
+		roots.add(`https://${url.hostname.replace(/^api\./i, "")}`);
+	} catch {
+		roots.add(baseUrl);
+	}
+	for (const root of roots) {
+		try {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+			const response = await fetch(`${root.replace(/\/+$/, "")}/api/models/public`, {
+				headers: { accept: "application/json" },
+				signal: controller.signal,
+			});
+			clearTimeout(timer);
+			if (!response.ok) continue;
+			const json = await response.json().catch(() => null);
+			if (parsePublicModelList(json, out)) return out;
+		} catch {
+			// try the next candidate root
+		}
+	}
+	return out;
+}
+
+// Metadata from a LiteLLM proxy's GET /model/info — one call returns
+// model_info for every configured model (context_window, max_tokens,
+// supports_vision, supports_reasoning, ...). Returns true when the response
+// looked like a LiteLLM /model/info payload and filled at least one entry.
+function parseLiteLLMModelInfo(json: any, out: Map<string, ModelProbeInfo>): boolean {
+	if (!json || typeof json !== "object") return false;
+	// /model/info returns { data: [...] }; tolerate a nested { data: { data: [...] } }
+	const entries = Array.isArray(json.data)
+		? json.data
+		: Array.isArray(json?.data?.data)
+			? json.data.data
+			: [];
+	if (entries.length === 0) return false;
+	let found = false;
+	for (const entry of entries) {
+		if (!entry || typeof entry !== "object") continue;
+		const name = typeof entry.model_name === "string" ? entry.model_name.trim() : "";
+		const info = entry.model_info;
+		if (!name || !info || typeof info !== "object") continue;
+		const parsed: ModelProbeInfo = {};
+		const contextWindow = firstFiniteNumber(info, "context_window", "max_input_tokens");
+		if (contextWindow !== undefined) parsed.contextWindow = contextWindow;
+		const maxTokens = firstFiniteNumber(info, "max_output_tokens", "max_tokens");
+		if (maxTokens !== undefined) parsed.maxTokens = maxTokens;
+		if (typeof info.supports_vision === "boolean") parsed.image = info.supports_vision;
+		if (typeof info.supports_reasoning === "boolean") parsed.reasoning = info.supports_reasoning;
+		// LiteLLM reports costs per token (input_cost_per_token, ...).
+		const cost = costFromPerToken(
+			firstFiniteNumber(info, "input_cost_per_token"),
+			firstFiniteNumber(info, "output_cost_per_token"),
+			firstFiniteNumber(info, "cache_read_input_token_cost"),
+			firstFiniteNumber(info, "cache_creation_input_token_cost"),
+		);
+		if (cost) parsed.cost = cost;
+		if (probeInfoSummary(parsed).length > 0) {
+			out.set(name, parsed);
+			found = true;
+		}
+	}
+	return found;
+}
+
+// LiteLLM proxy: GET /model/info returns metadata for every model in one
+// call, which is far cheaper than per-model fetches (and LiteLLM's
+// /models/{id} has no metadata at all). The endpoint is mounted at the
+// server root (/v1/model/info is 404 on LiteLLM), so try the baseUrl's
+// origin first, then the baseUrl itself.
+export async function enrichLiteLLMModelInfo(
+	baseUrl: string,
+	apiKey: string | undefined,
+): Promise<Map<string, ModelProbeInfo>> {
+	const headers: Record<string, string> = { accept: "application/json", "accept-encoding": "identity" };
+	if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+
+	const out = new Map<string, ModelProbeInfo>();
+	let roots: string[];
+	try {
+		const origin = new URL(baseUrl).origin;
+		const trimmedBase = baseUrl.replace(/\/+$/, "");
+		roots = origin === trimmedBase ? [trimmedBase] : [origin, trimmedBase];
+	} catch {
+		roots = [baseUrl.replace(/\/+$/, "")];
+	}
+	for (const root of roots) {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+		let response: Response | undefined;
+		try {
+			response = await fetch(`${root}/model/info`, { headers, signal: controller.signal });
+		} catch {
+			// network error — try the next root
+		} finally {
+			clearTimeout(timer);
+		}
+		if (response?.ok) {
+			const json = await response.json().catch(() => null);
+			if (parseLiteLLMModelInfo(json, out)) return out;
+		}
+	}
+	return out;
+}
+
+// Fetch GET /models/{id} for each model to learn context_window and
+// capabilities. Best effort: servers that don't expose per-model details
+// simply leave those fields unset.
+export async function enrichOpenAIModelDetails(
+	baseUrl: string,
+	apiKey: string | undefined,
+	ids: string[],
+): Promise<Map<string, ModelProbeInfo>> {
+	const headers: Record<string, string> = { accept: "application/json", "accept-encoding": "identity" };
+	if (apiKey) {
+		headers.authorization = `Bearer ${apiKey}`;
+		if (new URL(baseUrl).pathname.replace(/\/+$/, "").endsWith("/v1beta")) {
+			headers["x-goog-api-key"] = apiKey;
+		}
+	}
+
+	const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+	const out = new Map<string, ModelProbeInfo>();
+
+	let cursor = 0;
+	async function worker() {
+		while (cursor < ids.length) {
+			const id = ids[cursor++];
+			try {
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+				const response = await fetch(new URL(`models/${encodeURIComponent(id)}`, base).toString(), {
+					headers,
+					signal: controller.signal,
+				});
+				clearTimeout(timer);
+				if (!response.ok) continue;
+				const json = await response.json().catch(() => null);
+				const info = parseOpenAIModelDetail(json);
+				if (info) out.set(id, info);
+			} catch {
+				// Best effort — skip models the server can't describe.
+			}
+		}
+	}
+
+	await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, Math.max(1, ids.length)) }, worker));
+	return out;
+}
+
+// Derive the native Ollama API root from an OpenAI-compatible baseUrl
+// (http://host:11434/v1 -> http://host:11434).
+function ollamaNativeRoot(baseUrl: string): string | null {
+	try {
+		const url = new URL(baseUrl);
+		const pathname = url.pathname.replace(/\/+$/, "");
+		if (pathname.endsWith("/v1")) url.pathname = pathname.slice(0, -3) || "/";
+		return url.toString().replace(/\/+$/, "");
+	} catch {
+		return null;
+	}
+}
+
+// Ollama exposes native metadata: GET /api/tags (capabilities) and
+// POST /api/show (context_length via model_info).
+export async function enrichOllamaModelDetails(
+	baseUrl: string,
+	apiKey: string | undefined,
+	ids: string[],
+): Promise<Map<string, ModelProbeInfo>> {
+	const root = ollamaNativeRoot(baseUrl);
+	if (!root) return new Map();
+	const out = new Map<string, ModelProbeInfo>();
+
+	const headers: Record<string, string> = { accept: "application/json" };
+	if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+
+	try {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+		const response = await fetch(`${root}/api/tags`, { headers, signal: controller.signal });
+		clearTimeout(timer);
+		if (response.ok) {
+			const json = await response.json().catch(() => null);
+			for (const model of Array.isArray(json?.models) ? json.models : []) {
+				const name = typeof model?.name === "string" ? model.name.trim() : "";
+				if (!name) continue;
+				const info: ModelProbeInfo = {};
+				if (Array.isArray(model.capabilities)) info.image = model.capabilities.includes("vision");
+				if (Object.keys(info).length > 0) out.set(name, info);
+			}
+		}
+	} catch {
+		// Not an Ollama server; skip native probing entirely.
+	}
+
+	let cursor = 0;
+	async function worker() {
+		while (cursor < ids.length) {
+			const id = ids[cursor++];
+			try {
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+				const response = await fetch(`${root}/api/show`, {
+					method: "POST",
+					headers: { "content-type": "application/json", ...headers },
+					body: JSON.stringify({ name: id }),
+					signal: controller.signal,
+				});
+				clearTimeout(timer);
+				if (!response.ok) continue;
+				const json = await response.json().catch(() => null);
+				const info: ModelProbeInfo = { ...(out.get(id) ?? {}) };
+				const modelInfo = json?.model_info;
+				if (modelInfo && typeof modelInfo === "object") {
+					for (const [key, value] of Object.entries(modelInfo)) {
+						if (key.endsWith(".context_length") && typeof value === "number" && value > 0) {
+							info.contextWindow = value;
+						}
+					}
+				}
+				if (Array.isArray(json?.capabilities)) info.image = json.capabilities.includes("vision");
+				out.set(id, info);
+			} catch {
+				// Best effort.
+			}
+		}
+	}
+	await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, Math.max(1, ids.length)) }, worker));
+	return out;
+}

@@ -1,0 +1,71 @@
+{
+  "name": "@peiloviolet/better-custom-provider-fixed",
+  "version": "1.6.0-fix.1",
+  "description": "Portable fork of better-custom-provider with protocol-specific probe authentication",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "pi-coding-agent",
+    "oh-my-pi",
+    "omp",
+    "omp-extension",
+    "better-custom",
+    "custom-provider",
+    "llm-provider",
+    "ai-provider",
+    "provider-manager",
+    "custom-model",
+    "local-provider",
+    "local-llm",
+    "self-hosted-llm",
+    "openai-compatible",
+    "anthropic-compatible",
+    "ollama-compatible",
+    "openai",
+    "anthropic",
+    "ollama",
+    "llm",
+    "ai"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "vendor",
+    "FORK.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PeiloViolet/better-custom-provider-fixed.git"
+  },
+  "homepage": "https://github.com/PeiloViolet/better-custom-provider-fixed.git",
+  "bugs": {
+    "url": "https://github.com/PeiloViolet/better-custom-provider-fixed.git/issues"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "yaml": "^2.9.0",
+    "@opencode-ai/models": "0.0.53"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "scripts": {
+    "build": "echo 'No build step required'",
+    "check": "node --check index.ts && node --check src/types.ts && node --check src/config.ts && node --check src/url.ts && node --check src/api-key.ts && node --check src/model-entry.ts && node --check src/ui/select.ts && node --check src/ui/prompts.ts && node --check src/flows/shared.ts && node --check src/flows/add.ts && node --check src/flows/edit.ts && node --check src/flows/delete.ts",
+    "test": "node --test tests/*.test.mjs"
+  }
+}
