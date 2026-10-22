@@ -48,11 +48,11 @@ LLM providers — no hand-editing of config files required.
 
 ## Install
 
-```bash
-pi install npm:better-custom-provider        # from npm
-pi install https://github.com/real-wudaoshi/better-custom   # from GitHub
-pi install /path/to/better-custom            # from a local checkout
+```powershell
+pi install git:github.com/PeiloViolet/pi-custom-provider@v1.6.0-fix.2
 ```
+
+This fork is distributed through GitHub, not npm. Remove the original with `pi remove npm:better-custom-provider` first if installed, to avoid duplicate `/custom-provider` commands.
 
 Use `pi install` so Pi installs the runtime dependencies (`yaml` and `@opencode-ai/models`). The patched model-probe source is bundled in `vendor/model-probe`.
 

@@ -46,11 +46,11 @@ provider——无需手工编辑配置文件。
 
 ## 安装
 
-```bash
-pi install npm:better-custom-provider        # 从 npm
-pi install https://github.com/real-wudaoshi/better-custom   # 从 GitHub
-pi install /path/to/better-custom            # 从本地检出
+```powershell
+pi install git:github.com/PeiloViolet/pi-custom-provider@v1.6.0-fix.2
 ```
+
+本 fork 通过 GitHub 分发，尚未发布到 npm。若已安装原版，请先执行 `pi remove npm:better-custom-provider`，避免重复注册 `/custom-provider`。
 
 使用 `pi install`，由 Pi 安装运行时依赖 `yaml` 和 `@opencode-ai/models`。修复后的探测库随包附带于 `vendor/model-probe`。
 
