@@ -1,9 +1,5 @@
 # pi-custom-provider
 
-Independently maintained fork. The command remains `/custom-provider`. See [FORK.md](FORK.md) for installation and fixes. Original upstream documentation follows.
-
-# better-custom
-
 [中文文档](README.zh-CN.md)
 
 A better way to manage custom providers for Pi and Oh My Pi (OMP).
@@ -58,10 +54,7 @@ pi install https://github.com/real-wudaoshi/better-custom   # from GitHub
 pi install /path/to/better-custom            # from a local checkout
 ```
 
-Prefer `pi install` over copying the folder into `~/.pi/agent/extensions/`
-manually: `pi install` runs `npm install`, so the runtime dependencies
-(`model-probe`, `yaml`) are present. A manual copy still starts, but YAML
-configs degrade to JSON (a valid YAML subset).
+Use `pi install` so Pi installs the runtime dependencies (`yaml` and `@opencode-ai/models`). The patched model-probe source is bundled in `vendor/model-probe`.
 
 ## Usage
 
@@ -175,3 +168,8 @@ builders) · `src/api-key.ts`, `src/url.ts`, `src/presets.ts` (helpers).
 ## License
 
 MIT
+
+
+## Attribution and fix
+
+Based on [better-custom](https://github.com/real-wudaoshi/better-custom), retaining the MIT license. OpenAI-compatible probes no longer mix Google authentication headers. See [FORK.md](FORK.md).

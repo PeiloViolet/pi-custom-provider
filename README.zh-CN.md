@@ -1,9 +1,5 @@
 # pi-custom-provider
 
-本包是独立维护的 fork，命令仍为 `/custom-provider`。安装与修复说明见 [FORK.md](FORK.md)。下方保留上游说明。
-
-# better-custom
-
 [English](README.md)
 
 为 Pi 和 Oh My Pi (OMP) 管理自定义 provider 的更好方式。
@@ -56,10 +52,7 @@ pi install https://github.com/real-wudaoshi/better-custom   # 从 GitHub
 pi install /path/to/better-custom            # 从本地检出
 ```
 
-建议用 `pi install`,而不是手动把文件夹复制到 `~/.pi/agent/extensions/`:
-`pi install` 会执行 `npm install`,运行时依赖(`model-probe`、`yaml`)
-才会装好。手动复制也能启动,但 YAML 配置会退化为 JSON(JSON 是合法的
-YAML 子集)。
+使用 `pi install`，由 Pi 安装运行时依赖 `yaml` 和 `@opencode-ai/models`。修复后的探测库随包附带于 `vendor/model-probe`。
 
 ## 使用方法
 
@@ -166,3 +159,8 @@ auth.json 读写、迁移)· `src/model-entry.ts`(模型/provider 配置构建)�
 ## 许可证
 
 MIT
+
+
+## 来源与修复
+
+本项目基于 [better-custom](https://github.com/real-wudaoshi/better-custom)，保留 MIT 许可证。OpenAI 兼容探测不再混用 Google 认证头。完整说明见 [FORK.md](FORK.md)。
