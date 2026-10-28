@@ -14,6 +14,7 @@ import { resolveApiKeyForProbe, serializeApiKey } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, removeProviderApiKey, saveModelsConfig, saveProviderApiKey } from "../config.ts";
 import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
+import { fillCatalogFallback } from "../catalog-fallback.ts";
 import type { GatewayProbeProfile } from "../presets.ts";
 import type {
 	ApiKeyMode,
@@ -347,11 +348,11 @@ export async function collectProbedModelInfo(
 
 	const gw = gatewayWide ?? (await fetchGatewayWideInfo(style, apiKey, baseUrl, profile));
 
-	// models.dev catalog tier (exact per-model entries — above local rules,
-	// below detected values), matched by base URL. One cached call; empty when
-	// the endpoint isn't a known provider.
-	const dev =
-		modelsDev ?? (profile.modelsDev && style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(baseUrl) : undefined);
+	// Catalog data stays below detected values and above local rules. Match
+	// the endpoint first, then look up unmatched model IDs across providers.
+	const dev = profile.modelsDev && style !== "ollama"
+		? await fetchAutomaticCatalogInfo(ctx, baseUrl, ids, modelsDev)
+		: modelsDev;
 
 	// Per-model details for the picked ids. Skipped when a gateway-wide source
 	// already answered for everything (LiteLLM's /models/{id} has no metadata).
@@ -389,6 +390,20 @@ export function providerStyleOf(provider: unknown): ProviderStyle {
 }
 
 export type ModelsDevOption = { providerId: string; key: string; info: ModelProbeInfo; rank: number };
+
+// Custom relay URLs rarely match a catalog provider. Reuse the manual refresh
+// lookup automatically, retaining endpoint metadata above catalog values.
+export async function fetchAutomaticCatalogInfo(
+	ctx: CommandContext,
+	baseUrl: string,
+	ids: string[],
+	matched?: Map<string, ModelProbeInfo>,
+): Promise<Map<string, ModelProbeInfo>> {
+	const endpointInfo = matched ?? await fetchModelsDevInfoForBaseUrl(baseUrl);
+	return fillCatalogFallback(ids, endpointInfo, fetchModelsDevOptionsForModel, (id, option) => {
+		ctx.ui.notify(`${id}: metadata from models.dev (${option.providerId}/${option.key}).`, "info");
+	});
+}
 
 // Look up every models.dev catalog entry matching a model id, across all
 // providers, ignoring which endpoint the local provider points at. Relay

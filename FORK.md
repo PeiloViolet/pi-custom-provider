@@ -14,6 +14,8 @@ Remove or disable the original better-custom-provider first (use `pi list` to fi
 
 OpenAI discovery and per-model metadata requests no longer unconditionally carry x-goog-api-key. Native Gemini endpoints ending in /v1beta retain that header. Some gateways reject a valid Bearer token when a second authentication header is present. Host imports use @earendil-works packages supplied by current Pi. Probe sources are vendored and imported relatively, so dependency updates cannot silently undo the fix.
 
+Auto-detect now fills missing endpoint-matched catalog entries by searching models.dev across providers for each selected model ID, reusing the manual Refresh metadata lookup. Recognized model families prefer the maker's entry (OpenAI, Anthropic, Google, DeepSeek, xAI, Moonshot); other matches retain the existing lookup order. The wizard reports the selected catalog source. Endpoint-reported fields and endpoint-matched catalog entries retain priority, Ollama stays on native metadata, and missing catalog data still falls back to local rules/defaults. This also applies to re-probing models; manual entry keeps its explicit settings. models.dev is a third-party catalog, including when its entry describes a model maker.
+
 Discovery does not guarantee accurate context/output limits. The original wizard combines detected metadata, catalogs, rules, and fallback defaults; defaults are not verified server limits. No chat protocol or model capability is inferred from a successful model-list response.
 
 ## Local installation and checks
