@@ -2,6 +2,9 @@ import { normalizeModelIdCandidates } from "../vendor/model-probe/index.ts";
 import type { ModelProbeInfo } from "./types.ts";
 
 export type CatalogOption = { providerId: string; key: string; info: ModelProbeInfo; rank: number };
+export type CatalogReview = (
+	id: string, options: CatalogOption[], recommended: CatalogOption, detected?: ModelProbeInfo,
+) => Promise<CatalogOption | undefined>;
 
 // Prefer the maker's catalog entry over a relay's copy, even when the model
 // ID contains a relay prefix. Unknown families keep the existing lookup order.
@@ -33,18 +36,26 @@ export async function fillCatalogFallback(
 	endpointInfo: Map<string, ModelProbeInfo>,
 	lookup: (id: string) => Promise<CatalogOption[]>,
 	onMatch?: (id: string, option: CatalogOption) => void,
+	review?: CatalogReview,
 ): Promise<Map<string, ModelProbeInfo>> {
 	const result = new Map(endpointInfo);
 	for (const id of new Set(ids)) {
 		if (result.has(id)) continue;
+		let options: CatalogOption[];
 		try {
-			const chosen = preferredCatalogOption(id, await lookup(id));
-			if (chosen) {
-				result.set(id, chosen.info);
-				onMatch?.(id, chosen);
-			}
+			options = await lookup(id);
 		} catch {
 			// Continue with local rules and defaults when the catalog is unavailable.
+			continue;
+		}
+		const recommended = preferredCatalogOption(id, options);
+		if (!recommended) continue;
+		// Keep UI failures outside the network fallback catch. Esc/rejection is
+		// explicit and must not silently accept the recommended catalog entry.
+		const chosen = review ? await review(id, options, recommended) : recommended;
+		if (chosen) {
+			result.set(id, chosen.info);
+			onMatch?.(id, chosen);
 		}
 	}
 	return result;

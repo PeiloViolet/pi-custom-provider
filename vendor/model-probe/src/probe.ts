@@ -260,7 +260,7 @@ export function describeProbeInfo(info: ModelProbeInfo | undefined): string | un
 	const parts: string[] = [];
 	// Limit fields filled by the api fallback (tagged defaulted) carry no real
 	// information about the model — don't show them.
-	if (info.contextWindow !== undefined && !defaulted.has("contextWindow")) parts.push(`ctx ${info.contextWindow}${tag("contextWindow")}`);
+	if (info.contextWindow !== undefined && !defaulted.has("contextWindow")) parts.push(`Maximum context ${info.contextWindow}${tag("contextWindow")}`);
 	if (info.maxTokens !== undefined && !defaulted.has("maxTokens")) parts.push(`max-out ${info.maxTokens}${tag("maxTokens")}`);
 	// Only values that differ from the defaults (image/video: false,
 	// reasoning: true) are worth showing — a model with default values gets

@@ -1,4 +1,5 @@
 import { serializeApiKey } from "./api-key.ts";
+import { defaultContextWindow } from "./context-window.ts";
 import { SPLIT_AUTH } from "./config.ts";
 import { resolveModelInfo } from "../vendor/model-probe/index.ts";
 import { PI_THINKING_LEVELS, REASONING_LEVELS } from "./types.ts";
@@ -52,12 +53,17 @@ function ceilingFromThinkingMap(map: Record<string, string | null>): ReasoningCe
 // reasoning on); the wizard fallback only supplies the reasoning ceiling for
 // thinking models. (model-probe also tracks video input, but pi's model config
 // only supports text/image, so it isn't carried into ModelOptions.)
-export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions): ModelOptions {
+export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions, modelId = ""): ModelOptions {
 	if (!info) return fallback;
+	const maximum = info.defaultedFields?.includes("contextWindow")
+		? fallback.maxContextWindow : info.contextWindow ?? fallback.maxContextWindow;
+	const initial = defaultContextWindow(modelId, maximum);
 	const opts: ModelOptions = {
 		reasoning: fallback.reasoning,
 		image: info.image ?? fallback.image,
-		contextWindow: info.contextWindow ?? fallback.contextWindow,
+		contextWindow: maximum ? initial : fallback.contextWindow ?? initial,
+		defaultContextWindow: initial,
+		maxContextWindow: maximum,
 		maxTokens: info.maxTokens ?? fallback.maxTokens,
 		cost: info.cost ?? fallback.cost,
 	};
@@ -123,6 +129,11 @@ export function buildModelEntry(
 	if (typeof opts.contextWindow === "number" && opts.contextWindow > 0) {
 		entry.contextWindow = opts.contextWindow;
 	}
+	// Extension metadata; Pi uses contextWindow as the active window. Keep
+	// capacity separately so returning to Edit per model never loses it.
+	if (typeof opts.maxContextWindow === "number" && opts.maxContextWindow > 0) {
+		entry.maxContextWindow = opts.maxContextWindow;
+	}
 	if (typeof opts.maxTokens === "number" && opts.maxTokens > 0) {
 		entry.maxTokens = opts.maxTokens;
 	}
@@ -154,9 +165,8 @@ export function buildProviderConfig(
 	ceilingOverrides?: Partial<Record<"xhigh" | "max", string>>,
 	infoById?: Map<string, ModelProbeInfo>,
 	developerRole?: boolean,
-	// Explicit per-model options from the manual-entry metadata prompts; these
-	// win over the resolved probe/rule values (contextWindow falls back to the
-	// resolved value when the user left it unset).
+	// Explicit per-model options from manual entry or fallback review win over
+	// resolved metadata, including an explicit clear of a token limit.
 	optionOverrides?: Map<string, ModelOptions>,
 ) {
 	const serializedApiKey = serializeApiKey(apiKey.mode, apiKey.value, style);
@@ -173,13 +183,7 @@ export function buildProviderConfig(
 			// manually added models, which have no probe info at all.
 			const info = resolveModelInfo(id, infoById?.get(id), undefined, api);
 			const override = optionOverrides?.get(id);
-			const modelOpts = override
-				? {
-						...override,
-						contextWindow: override.contextWindow ?? info.contextWindow,
-						maxTokens: override.maxTokens ?? info.maxTokens,
-					}
-				: modelOptionsFromProbe(info, opts);
+			const modelOpts = override ?? modelOptionsFromProbe(info, opts, id);
 			return buildModelEntry(id, modelOpts, ceilingOverrides);
 		}),
 	};
@@ -206,7 +210,15 @@ export function buildProviderConfig(
 export function readModelOptions(model: any): ModelOptions {
 	const image = Array.isArray(model?.input) ? model.input.includes("image") : true;
 	const contextWindow = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
-	if (!model || model.reasoning !== true) return { reasoning: "off", image, contextWindow };
+	const maximum = typeof model?.maxContextWindow === "number" ? model.maxContextWindow : undefined;
+	const metadata = {
+		image, contextWindow,
+		maxContextWindow: maximum,
+		defaultContextWindow: defaultContextWindow(model?.id ?? "", maximum),
+		maxTokens: typeof model?.maxTokens === "number" ? model.maxTokens : undefined,
+		cost: model?.cost,
+	};
+	if (!model || model.reasoning !== true) return { ...metadata, reasoning: "off" };
 
 	const map = model.thinkingLevelMap;
 	let ceiling: ReasoningCeiling = "high";
@@ -225,7 +237,7 @@ export function readModelOptions(model: any): ModelOptions {
 			}
 		}
 	}
-	return { reasoning: ceiling, image, contextWindow };
+	return { ...metadata, reasoning: ceiling, thinkingLevelMap: map };
 }
 
 export function readCeilingString(model: any, level: "xhigh" | "max"): string | undefined {

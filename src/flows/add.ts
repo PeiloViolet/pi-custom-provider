@@ -14,7 +14,7 @@ import { buildProviderConfig } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
 import { pickMany, selectOne } from "../ui/select.ts";
-import { promptApiKey, promptEndpoint, promptManualModels, promptProviderId, promptProviderStyle } from "../ui/prompts.ts";
+import { promptApiKey, promptEndpoint, promptManualModels, promptCatalogFallback, promptProviderId, promptProviderStyle } from "../ui/prompts.ts";
 import { buildProbeUrl, dedupe, hasExplicitScheme, normalizeEndpoint } from "../url.ts";
 import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistApiKey, persistProvider, probePickerItems } from "./shared.ts";
 
@@ -192,8 +192,16 @@ async function collectModelIds(
 			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById, modelsDev, api));
 			if (!picked || picked.length === 0) return null;
 
-			const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, gatewayWide, modelsDev, api);
-			return { ids: picked, infoById, baseUrl };
+			const options = new Map<string, ModelOptions>();
+			const infoById = await collectProbedModelInfo(
+				ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, gatewayWide, modelsDev, api,
+				async (id, candidates, recommended, detected) => {
+					const reviewed = await promptCatalogFallback(ctx, id, candidates, recommended, detected, api);
+					if (reviewed?.options) options.set(id, reviewed.options);
+					return reviewed?.selected;
+				},
+			);
+			return { ids: picked, infoById, baseUrl, options };
 		} catch (error) {
 			const schemeHint = hasExplicitScheme(trimmedEndpointInput) ? "" : " No http:// or https:// was provided.";
 			ctx.ui.notify(`Auto probe failed: ${error instanceof Error ? error.message : String(error)}.${schemeHint}`, "warning");

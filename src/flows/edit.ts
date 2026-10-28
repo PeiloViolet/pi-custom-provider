@@ -1,18 +1,16 @@
 import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeModels } from "../../vendor/model-probe/index.ts";
 import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, renameProviderApiKey, saveModelsConfig } from "../config.ts";
-import { applyReasoning, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
+import { applyReasoning, buildModelEntry, findModel, modelIdOf, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
+import { updateContextCapacity } from "../context-window.ts";
 import type { CommandContext, ModelProbeInfo, ModelsConfig, ProbeResult, ProviderApi, SelectItem } from "../types.ts";
 import { pickMany, pickTriState, selectOne } from "../ui/select.ts";
 import type { TriItem } from "../ui/select.ts";
 import {
-	promptCeilingProviderString,
-	promptContextWindow,
+	editModelMetadataField,
+	modelMetadataItems,
 	promptManualModels,
-	promptMaxTokens,
-	promptReasoning,
-	promptImage,
 	resolveBuiltinCollision,
 } from "../ui/prompts.ts";
 import { buildProbeUrl, normalizeEndpoint, slugify } from "../url.ts";
@@ -339,16 +337,11 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 		}
 
 		const opts = readModelOptions(model);
-		const ctxWin = typeof model.contextWindow === "number" ? model.contextWindow : "unset";
-		const maxTok = typeof model.maxTokens === "number" ? model.maxTokens : "unset";
 		const hasHeaders = model.headers && Object.keys(model.headers).length > 0;
 		const override = model.baseUrl || model.api ? "set" : "unset";
 
 		const field = await selectOne(ctx, `Edit ${modelId}`, [
-			{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → xhigh)" },
-			{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
-			{ value: "context", label: "Context window", suffix: ` • ${ctxWin}`, description: "Max context tokens for this model" },
-			{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${maxTok}`, description: "Max tokens this model may generate" },
+			...modelMetadataItems(opts),
 			{ value: "override", label: "Headers / endpoint override", suffix: ` • ${hasHeaders ? "headers" : override}`, description: "Per-model HTTP headers and api/baseUrl override" },
 			{ value: "refresh", label: "Refresh metadata", description: "Pull context/image/reasoning from models.dev or the endpoint's /models" },
 			{ value: "delete", label: "Delete this model", description: "Remove this model from the provider" },
@@ -356,30 +349,18 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 		]);
 		if (!field || field === "back") return false;
 
-		if (field === "reasoning") {
-			const reasoning = await promptReasoning(ctx, opts.reasoning);
-			if (reasoning === null) continue;
-			let ceilingOverrides: Partial<Record<"xhigh" | "max", string>> | undefined;
-			if (reasoning === "xhigh" || reasoning === "max") {
-				const value = await promptCeilingProviderString(ctx, reasoning, readCeilingString(model, reasoning));
-				if (value) {
-					ceilingOverrides = {};
-					ceilingOverrides[reasoning] = value;
+		if (modelMetadataItems(opts).some((item) => item.value === field)) {
+			if (!(await editModelMetadataField(ctx, opts, field))) continue;
+			const entry = buildModelEntry(modelId, opts);
+			const keys = field === "reasoning" ? ["reasoning", "thinkingLevelMap"]
+				: field === "context" ? ["contextWindow", "maxContextWindow"]
+				: [field === "image" ? "input" : "maxTokens"];
+			await mutateModel(ctx, providerId, modelId, (m) => {
+				for (const key of keys) {
+					if (entry[key] === undefined) delete m[key];
+					else m[key] = entry[key];
 				}
-			}
-			await mutateModel(ctx, providerId, modelId, (m) => applyReasoning(m, reasoning, ceilingOverrides));
-		} else if (field === "image") {
-			const image = await promptImage(ctx, opts.image);
-			if (image === null) continue;
-			await mutateModel(ctx, providerId, modelId, (m) => { m.input = image ? ["text", "image"] : ["text"]; });
-		} else if (field === "context") {
-			const result = await promptContextWindow(ctx, typeof model.contextWindow === "number" ? model.contextWindow : undefined);
-			if (result === null) continue;
-			await mutateModel(ctx, providerId, modelId, (m) => { if (result === 0) delete m.contextWindow; else m.contextWindow = result; });
-		} else if (field === "maxtokens") {
-			const result = await promptMaxTokens(ctx, typeof model.maxTokens === "number" ? model.maxTokens : undefined);
-			if (result === null) continue;
-			await mutateModel(ctx, providerId, modelId, (m) => { if (result === 0) delete m.maxTokens; else m.maxTokens = result; });
+			});
 		} else if (field === "override") {
 			await editModelOverride(ctx, providerId, modelId);
 		} else if (field === "refresh") {
@@ -461,8 +442,8 @@ function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
 		const value = info[field];
 		if (value === undefined || guessed.has(field)) continue;
 		if (field === "contextWindow") {
-			const old = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
-			if (old !== value) changes.push({ field, label: `context ${old ?? "unset"}→${value}` });
+			const old = model?.maxContextWindow ?? model?.contextWindow;
+			if (old !== value) changes.push({ field, label: `maximum context ${old ?? "unset"}→${value}` });
 		} else if (field === "maxTokens") {
 			const old = typeof model?.maxTokens === "number" ? model.maxTokens : undefined;
 			if (old !== value) changes.push({ field, label: `max-out ${old ?? "unset"}→${value}` });
@@ -492,7 +473,7 @@ function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
 // Write the authoritative probed values onto a stored entry in place.
 function applyMetaChanges(entry: any, info: ModelProbeInfo, changes: MetaChange[]) {
 	for (const change of changes) {
-		if (change.field === "contextWindow") entry.contextWindow = info.contextWindow;
+		if (change.field === "contextWindow") updateContextCapacity(entry, info.contextWindow!);
 		else if (change.field === "maxTokens") entry.maxTokens = info.maxTokens;
 		else if (change.field === "image") entry.input = info.image ? ["text", "image"] : ["text"];
 		else if (change.field === "cost") entry.cost = info.cost;
@@ -507,6 +488,7 @@ function storedModelSummary(model: any): string {
 	if (model?.reasoning === true) details.push(`reasoning:${readModelOptions(model).reasoning}`);
 	if (Array.isArray(model?.input) && model.input.includes("image")) details.push("image");
 	if (typeof model?.contextWindow === "number") details.push(`context ${model.contextWindow}`);
+	if (typeof model?.maxContextWindow === "number") details.push(`maximum context ${model.maxContextWindow}`);
 	if (typeof model?.maxTokens === "number") details.push(`max-out ${model.maxTokens}`);
 	if (model?.cost && typeof model.cost === "object") details.push(`$${model.cost.input}/$${model.cost.output} per 1M`);
 	return details.join(" • ");

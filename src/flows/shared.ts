@@ -14,7 +14,7 @@ import { resolveApiKeyForProbe, serializeApiKey } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, removeProviderApiKey, saveModelsConfig, saveProviderApiKey } from "../config.ts";
 import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
-import { fillCatalogFallback } from "../catalog-fallback.ts";
+import { fillCatalogFallback, type CatalogReview } from "../catalog-fallback.ts";
 import type { GatewayProbeProfile } from "../presets.ts";
 import type {
 	ApiKeyMode,
@@ -127,6 +127,7 @@ export function providerModelItems(provider: any): SelectItem[] {
 				}
 				if (Array.isArray(model.input) && model.input.includes("image")) details.push("image");
 				if (typeof model.contextWindow === "number") details.push(`context ${model.contextWindow}`);
+				if (typeof model.maxContextWindow === "number") details.push(`max-context ${model.maxContextWindow}`);
 				if (typeof model.maxTokens === "number") details.push(`max-out ${model.maxTokens}`);
 				if (model.cost && typeof model.cost === "object") details.push(`$${model.cost.input}/$${model.cost.output} per 1M`);
 			}
@@ -248,8 +249,7 @@ export async function addModelEntriesToProvider(
 	providerId: string,
 	ids: string[],
 	infoById?: Map<string, ModelProbeInfo>,
-	// Explicit per-model options from the manual metadata prompts; wins over
-	// the resolved values (contextWindow falls back to resolved when unset).
+	// Confirmed per-model options win over resolved values, including clears.
 	optionOverrides?: Map<string, ModelOptions>,
 ) {
 	const existing = new Set<string>();
@@ -278,13 +278,7 @@ export async function addModelEntriesToProvider(
 			const mergedInfo = resolveModelInfo(id, infoById?.get(id), undefined, api);
 			if (probeInfoSummary(mergedInfo).length > 0) detectedCount++;
 			const override = optionOverrides?.get(id);
-			const opts = override
-				? {
-						...override,
-						contextWindow: override.contextWindow ?? mergedInfo.contextWindow,
-						maxTokens: override.maxTokens ?? mergedInfo.maxTokens,
-					}
-				: modelOptionsFromProbe(mergedInfo, defaultOpts);
+			const opts = override ?? modelOptionsFromProbe(mergedInfo, defaultOpts, id);
 			models.push(buildModelEntry(id, opts));
 		}
 		p.models = models;
@@ -322,11 +316,14 @@ export function probePickerItems(
 	modelsDev?: Map<string, ModelProbeInfo>,
 	api?: ProviderApi,
 ): ProbeItem[] {
-	return ids.map((id) => ({
-		value: id,
-		label: id,
-		description: describeProbeInfo(resolveModelInfo(id, infoById.get(id), modelsDev, api)),
-	}));
+	return ids.map((id) => {
+		const info = resolveModelInfo(id, infoById.get(id), modelsDev, api);
+		const opts = modelOptionsFromProbe(info, { reasoning: "xhigh", image: false }, id);
+		return {
+			value: id, label: id,
+			description: [`Default context ${opts.defaultContextWindow}`, describeProbeInfo(info)].filter(Boolean).join(" • "),
+		};
+	});
 }
 
 export async function collectProbedModelInfo(
@@ -341,18 +338,13 @@ export async function collectProbedModelInfo(
 	// The provider's api flavor — enables model-probe's protocol-level
 	// fallback limits when nothing else knows them.
 	api?: ProviderApi,
+	reviewFallback?: CatalogReview,
 ): Promise<Map<string, ModelProbeInfo>> {
 	ctx.ui.notify("Fetching model metadata (context, max-out, image/video, reasoning) ...", "info");
 	const profile = AUTO_PROBE_PROFILE;
 	const resolvedKey = resolveApiKeyForProbe(apiKey.mode, apiKey.value);
 
 	const gw = gatewayWide ?? (await fetchGatewayWideInfo(style, apiKey, baseUrl, profile));
-
-	// Catalog data stays below detected values and above local rules. Match
-	// the endpoint first, then look up unmatched model IDs across providers.
-	const dev = profile.modelsDev && style !== "ollama"
-		? await fetchAutomaticCatalogInfo(ctx, baseUrl, ids, modelsDev)
-		: modelsDev;
 
 	// Per-model details for the picked ids. Skipped when a gateway-wide source
 	// already answered for everything (LiteLLM's /models/{id} has no metadata).
@@ -363,9 +355,18 @@ export async function collectProbedModelInfo(
 		details = await fetchPerModelInfo(baseUrl, ids, { apiKey: resolvedKey });
 	}
 
-	// Merge (later maps win) and resolve: models.dev, then local rules, then
-	// the api fallback, then defaults.
-	return finalizeModelInfo(ids, [listInfo, gw, details], { modelsDev: dev, api });
+	// Review the effective values, including gateway limits, before saving a
+	// catalog fallback. Explicit edits are retained by the add flow separately.
+	const detected = new Map<string, ModelProbeInfo>();
+	for (const map of [listInfo, gw, details]) {
+		for (const [id, info] of map) detected.set(id, { ...detected.get(id), ...info });
+	}
+	const dev = profile.modelsDev && style !== "ollama"
+		? await fetchAutomaticCatalogInfo(ctx, baseUrl, ids, modelsDev, reviewFallback
+			? (id, options, recommended) => reviewFallback(id, options, recommended, detected.get(id))
+			: undefined)
+		: modelsDev;
+	return finalizeModelInfo(ids, [detected], { modelsDev: dev, api });
 }
 
 // The ollama style leaves a compat object with BOTH flags false; every other
@@ -398,11 +399,12 @@ export async function fetchAutomaticCatalogInfo(
 	baseUrl: string,
 	ids: string[],
 	matched?: Map<string, ModelProbeInfo>,
+	review?: CatalogReview,
 ): Promise<Map<string, ModelProbeInfo>> {
 	const endpointInfo = matched ?? await fetchModelsDevInfoForBaseUrl(baseUrl);
 	return fillCatalogFallback(ids, endpointInfo, fetchModelsDevOptionsForModel, (id, option) => {
 		ctx.ui.notify(`${id}: metadata from models.dev (${option.providerId}/${option.key}).`, "info");
-	});
+	}, review);
 }
 
 // Look up every models.dev catalog entry matching a model id, across all
