@@ -92,10 +92,11 @@ export function modelMetadataItems(opts: ModelOptions): SelectItem[] {
 		{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
 		{ value: "context", label: "Context window", suffix: ` • ${opts.contextWindow ?? "unset"}`, description: `Default context: ${opts.defaultContextWindow ?? "unknown"} • Maximum context: ${opts.maxContextWindow ?? "unknown"}. Select a window to use.` },
 		{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${opts.maxTokens ?? "unset"}`, description: "Max tokens this model may generate" },
-	];
+	].map((item) => ({ ...item, suffix: `${item.suffix} • ${opts.manualFields?.includes(item.value) ? "manual" : "automatic"}` }));
 }
 
 export async function editModelMetadataField(ctx: CommandContext, opts: ModelOptions, field: string): Promise<boolean> {
+	let manual = true;
 	if (field === "reasoning") {
 		const value = await promptReasoning(ctx, opts.reasoning);
 		if (value === null) return false;
@@ -114,27 +115,29 @@ export async function editModelMetadataField(ctx: CommandContext, opts: ModelOpt
 		if (value === null) return false;
 		opts.image = value;
 	} else if (field === "context") {
-		const items: SelectItem[] = [];
-		if (opts.defaultContextWindow) items.push({ value: "default", label: "Default context", suffix: ` • ${opts.defaultContextWindow}`, description: "Use the default context window" });
-		if (opts.maxContextWindow && opts.maxContextWindow !== opts.defaultContextWindow) items.push({ value: "maximum", label: "Maximum context", suffix: ` • ${opts.maxContextWindow}`, description: "Enable the full advertised context capacity" });
-		items.push({ value: "custom", label: "Custom context", description: "Enter a context window size" });
-		const current = opts.contextWindow === opts.defaultContextWindow ? "default"
-			: opts.contextWindow === opts.maxContextWindow ? "maximum" : "custom";
-		const choice = await selectOne(ctx, "Context window", items, { initialIndex: Math.max(0, items.findIndex((item) => item.value === current)) });
+		const choice = await selectOne(ctx, "Context window", [
+			{ value: "automatic", label: "Automatic", suffix: ` • ${opts.defaultContextWindow ?? "unknown"}`, description: "Use the default context; update automatically when metadata is refreshed" },
+			{ value: "manual", label: "Manual", description: `Enter a window size. Maximum context: ${opts.maxContextWindow ?? "unknown"}` },
+		], { initialIndex: opts.manualFields?.includes("context") ? 1 : 0 });
 		if (!choice) return false;
-		const value = choice === "default" ? opts.defaultContextWindow
-			: choice === "maximum" ? opts.maxContextWindow : await promptContextWindow(ctx, opts.contextWindow);
+		const value = choice === "automatic" ? opts.defaultContextWindow : await promptContextWindow(ctx, opts.contextWindow);
 		if (value === null || value === undefined) return false;
 		if (opts.maxContextWindow && value > opts.maxContextWindow) {
 			ctx.ui.notify(`Context window cannot exceed the maximum context (${opts.maxContextWindow}).`, "warning");
 			return false;
 		}
 		opts.contextWindow = value || opts.defaultContextWindow;
+		manual = choice === "manual" && value > 0;
 	} else if (field === "maxtokens") {
 		const value = await promptMaxTokens(ctx, opts.maxTokens);
 		if (value === null) return false;
 		opts.maxTokens = value > 0 ? value : undefined;
 	} else return false;
+	const fields = new Set(opts.manualFields ?? []);
+	if (manual) fields.add(field);
+	else fields.delete(field);
+	if (fields.size) opts.manualFields = [...fields];
+	else delete opts.manualFields;
 	return true;
 }
 

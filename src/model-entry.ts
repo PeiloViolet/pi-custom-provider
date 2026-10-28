@@ -138,6 +138,8 @@ export function buildModelEntry(
 		entry.maxTokens = opts.maxTokens;
 	}
 
+	if (opts.manualFields?.length) entry.manualFields = [...opts.manualFields];
+
 	// List prices so pi's usage accounting can estimate cost for custom
 	// providers too. Only real sources (gateway-reported or models.dev).
 	if (opts.cost) {
@@ -212,9 +214,10 @@ export function readModelOptions(model: any): ModelOptions {
 	const contextWindow = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
 	const maximum = typeof model?.maxContextWindow === "number" ? model.maxContextWindow : undefined;
 	const metadata = {
+		...(Array.isArray(model?.manualFields) ? { manualFields: [...model.manualFields] } : {}),
 		image, contextWindow,
 		maxContextWindow: maximum,
-		defaultContextWindow: defaultContextWindow(model?.id ?? "", maximum),
+		defaultContextWindow: defaultContextWindow(modelIdOf(model), maximum),
 		maxTokens: typeof model?.maxTokens === "number" ? model.maxTokens : undefined,
 		cost: model?.cost,
 	};

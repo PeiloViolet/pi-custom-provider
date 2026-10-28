@@ -31,7 +31,8 @@ registerHooks({
 const { promptCatalogFallback, editModelMetadataField } = await import('../src/ui/prompts.ts');
 const { buildProviderConfig, buildModelEntry, readModelOptions } = await import('../src/model-entry.ts');
 const { fillCatalogFallback } = await import('../src/catalog-fallback.ts');
-const { defaultContextWindow, updateContextCapacity } = await import('../src/context-window.ts');
+const { defaultContextWindow } = await import('../src/context-window.ts');
+const { diffStoredModel, applyMetaChanges, automaticMetadataFields } = await import('../src/model-metadata.ts');
 
 const native = { providerId: 'openai', key: 'gpt-test', rank: 1,
  info: { image: true, reasoning: true, contextWindow: 1000000, maxTokens: 64000,
@@ -165,24 +166,26 @@ test('protocol fallback is not advertised capacity or a cap on the default conte
  assert.equal(legacy.maxContextWindow, undefined);
 });
 
-test('maximum context needs an explicit choice and can return to default after save', async () => {
+test('context has automatic and manual modes; manual maximum survives save and can reset', async () => {
  const id = 'gpt-6.1-sol';
  const opts = readModelOptions({ id, input: ['text'], contextWindow: 272000, maxContextWindow: 1050000 });
- const ui = scriptedUi([{ title: 'Context window', search: 'Maximum context' }]);
+ const ui = scriptedUi([{ title: 'Context window', search: 'Manual' }], ['1050000']);
  assert.equal(await editModelMetadataField(ui.ctx, opts, 'context'), true);
  const entry = buildModelEntry(id, opts);
  assert.equal(entry.contextWindow, 1050000);
  assert.equal(entry.maxContextWindow, 1050000);
+ assert.deepEqual(entry.manualFields, ['context']);
  const restored = readModelOptions(entry);
- const reset = scriptedUi([{ title: 'Context window', search: 'Default context' }]);
+ const reset = scriptedUi([{ title: 'Context window', search: 'Automatic' }]);
  assert.equal(await editModelMetadataField(reset.ctx, restored, 'context'), true);
  assert.equal(buildModelEntry(id, restored).contextWindow, 272000);
+ assert.equal(buildModelEntry(id, restored).manualFields, undefined);
  ui.done(); reset.done();
 });
 
 test('custom context cannot exceed capacity, and Esc leaves the active window alone', async () => {
  const opts = readModelOptions({ id: 'gpt-6.1-sol', contextWindow: 272000, maxContextWindow: 1050000 });
- const ui = scriptedUi([{ title: 'Context window', search: 'Custom context' }], ['2000000']);
+ const ui = scriptedUi([{ title: 'Context window', search: 'Manual' }], ['2000000']);
  assert.equal(await editModelMetadataField(ui.ctx, opts, 'context'), false);
  assert.equal(opts.contextWindow, 272000);
  const cancelled = scriptedUi([{ title: 'Context window', escape: true }]);
@@ -191,18 +194,68 @@ test('custom context cannot exceed capacity, and Esc leaves the active window al
  ui.done(); cancelled.done();
 });
 
-test('refreshing advertised capacity never silently expands an active context', () => {
- const model = { id: 'gpt-6.1-sol', contextWindow: 258000 };
- updateContextCapacity(model, 1050000);
- assert.deepEqual(model, { id: 'gpt-6.1-sol', contextWindow: 258000, maxContextWindow: 1050000 });
- updateContextCapacity(model, 200000);
- assert.equal(model.contextWindow, 200000);
- const missing = { id: 'gpt-6.1-sol' };
- updateContextCapacity(missing, 1050000);
- assert.equal(missing.contextWindow, undefined);
- assert.equal(missing.maxContextWindow, 1050000);
- updateContextCapacity(missing, 64000);
- assert.equal(missing.contextWindow, 64000);
+test('automatic refresh replaces any legacy window even when maximum metadata already matches', () => {
+ for (const previous of [undefined, 128000, 258000, 400000, 1050000]) {
+  const model = { id: 'gpt-6.1-sol', contextWindow: previous, maxContextWindow: 1050000 };
+  applyMetaChanges(model, diffStoredModel(model, { contextWindow: 1050000 }));
+  assert.equal(model.contextWindow, 272000);
+  assert.equal(model.maxContextWindow, 1050000);
+  assert.deepEqual(diffStoredModel(model, { contextWindow: 1050000 }), []);
+ }
+ const stringChanges = diffStoredModel('gpt-6.1-sol', { contextWindow: 1050000 });
+ assert.equal(stringChanges.find(change => change.key === 'contextWindow').value, 272000);
+});
+
+test('only manually edited fields survive refresh; other metadata and capacity still update', () => {
+ const model = { id: 'gpt-6.1-sol', contextWindow: 900000, maxTokens: 12345,
+  manualFields: ['context', 'maxtokens'], input: ['text'] };
+ applyMetaChanges(model, diffStoredModel(model, { contextWindow: 1050000, maxTokens: 128000, image: true }));
+ assert.equal(model.contextWindow, 900000);
+ assert.equal(model.maxTokens, 12345);
+ assert.equal(model.maxContextWindow, 1050000);
+ assert.deepEqual(model.input, ['text', 'image']);
+ const opts = readModelOptions(model);
+ assert.deepEqual(buildModelEntry(model.id, opts).manualFields, ['context', 'maxtokens']);
+});
+
+test('missing, inferred, and protocol fallback data do not erase or overwrite stored fields', () => {
+ const model = { id: 'gpt-6.1-sol', contextWindow: 777777, maxTokens: 32100, input: ['text', 'image'] };
+ for (const info of [{}, { contextWindow: 258000, maxTokens: 32000, defaultedFields: ['contextWindow', 'maxTokens'] },
+  { image: false, inferredFields: ['image'] }]) assert.deepEqual(diffStoredModel(model, info), []);
+});
+
+test('refresh updates exact reasoning effort mappings even if reasoning was already enabled', () => {
+ const model = { id: 'gpt-6.1-sol', reasoning: true, thinkingLevelMap: { high: 'old-high' } };
+ applyMetaChanges(model, diffStoredModel(model, { reasoning: true, effortOptions: ['low', 'high', 'max'] }));
+ assert.equal(model.thinkingLevelMap.high, 'high');
+ assert.equal(model.thinkingLevelMap.max, 'max');
+ assert.equal(model.thinkingLevelMap.xhigh, null);
+ model.manualFields = ['reasoning'];
+ assert.deepEqual(diffStoredModel(model, { reasoning: false }), []);
+});
+
+test('missing reasoning levels preserve an exact map while explicit disable clears it', () => {
+ const model = { id: 'gpt-6.1-sol', reasoning: true,
+  thinkingLevelMap: { low: 'low', high: 'high', xhigh: null, max: null } };
+ const before = structuredClone(model.thinkingLevelMap);
+ applyMetaChanges(model, diffStoredModel(model, { reasoning: true }));
+ assert.deepEqual(model.thinkingLevelMap, before);
+ applyMetaChanges(model, diffStoredModel(model, { reasoning: false }));
+ assert.equal(model.reasoning, undefined);
+ assert.equal(model.thinkingLevelMap, undefined);
+ assert.equal(automaticMetadataFields({ reasoning: false }).size, 1);
+ assert.equal(automaticMetadataFields({ reasoning: true, defaultedFields: ['reasoning'] }).size, 0);
+});
+
+test('legacy string model editor uses the model-specific automatic default', async () => {
+ const opts = readModelOptions('gpt-6.1-sol');
+ assert.equal(opts.defaultContextWindow, 272000);
+ const ui = scriptedUi([{ title: 'Context window', search: 'Automatic' }]);
+ assert.equal(await editModelMetadataField(ui.ctx, opts, 'context'), true);
+ const model = buildModelEntry('gpt-6.1-sol', opts);
+ assert.equal(model.contextWindow, 272000);
+ assert.equal(model.manualFields, undefined);
+ ui.done();
 });
 
 test('Esc in the reasoning provider-value prompt cancels the entire field edit', async () => {

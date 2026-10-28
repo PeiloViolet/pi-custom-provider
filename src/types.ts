@@ -19,6 +19,8 @@ export type ModelOptions = {
 	defaultContextWindow?: number;
 	maxContextWindow?: number;
 	maxTokens?: number;
+	// Fields explicitly edited by the user; all others refresh automatically.
+	manualFields?: string[];
 	// USD per 1M tokens, from the gateway or the models.dev catalog. Only real
 	// sources — never guessed.
 	cost?: ModelCostInfo;
