@@ -1,5 +1,4 @@
 import {
-	fetchModelsDevInfoForBaseUrl,
 	fetchModelsDevModels,
 	fetchModelsDevProviders,
 	finalizeModelInfo,
@@ -11,12 +10,11 @@ import {
 import { resolveApiKeyForProbe } from "../api-key.ts";
 import { loadModelsConfig, MODELS_JSON_PATH } from "../config.ts";
 import { buildProviderConfig } from "../model-entry.ts";
-import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
 import { pickMany, selectOne } from "../ui/select.ts";
 import { promptApiKey, promptEndpoint, promptManualModels, promptProviderId, promptProviderStyle } from "../ui/prompts.ts";
 import { buildProbeUrl, dedupe, hasExplicitScheme, normalizeEndpoint } from "../url.ts";
-import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistApiKey, persistProvider, probePickerItems } from "./shared.ts";
+import { collectProbedModelInfo, findProvidersByEndpoint, persistApiKey, persistProvider, reviewModelEntries } from "./shared.ts";
 
 // Manual model entry (id → per-model metadata menu) lives in ui/prompts.ts as
 // promptManualModels; every "add by hand" path below funnels through it.
@@ -102,10 +100,13 @@ async function addFromCatalog(ctx: CommandContext) {
 	let infoById: Map<string, ModelProbeInfo> | undefined;
 	let overrides: Map<string, ModelOptions> | undefined;
 	if (catalog.size > 0) {
-		const picked = await pickMany(ctx, "Select models", probePickerItems([...catalog.keys()], new Map(), catalog, api));
+		const picked = await pickMany(ctx, "Select models", [...catalog.keys()].map(id => ({ value: id, label: id })));
 		if (!picked || picked.length === 0) return;
 		ids = picked;
 		infoById = finalizeModelInfo(picked, [], { modelsDev: catalog, api });
+		const reviewed = await reviewModelEntries(ctx, ids, infoById, api);
+		if (!reviewed) return;
+		overrides = reviewed;
 	} else {
 		ctx.ui.notify(`models.dev lists no models for ${provider.name} — enter ids by hand.`, "warning");
 		const manual = await promptManualModels(ctx, style);
@@ -173,27 +174,15 @@ async function collectModelIds(
 				return manual ? { ...manual, baseUrl } : null;
 			}
 
-			// Gateway-wide metadata (one call per source) — fetch BEFORE the picker so
-			// it shows real detected values instead of catalog/rule guesses.
-			let gatewayWide: Map<string, ModelProbeInfo> | undefined;
-			if (AUTO_PROBE_PROFILE.modelInfo || AUTO_PROBE_PROFILE.publicCatalog || AUTO_PROBE_PROFILE.modelGroupInfo) {
-				ctx.ui.notify("Fetching model metadata (context, max-out, image/video, reasoning) ...", "info");
-				gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, AUTO_PROBE_PROFILE);
-				if (gatewayWide.size > 0) {
-					for (const [id, info] of gatewayWide) {
-						probed.infoById.set(id, { ...(probed.infoById.get(id) ?? {}), ...info });
-					}
-				}
-			}
-
-			// models.dev catalog tier — above the local rules, below detected values.
-			const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
-
-			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById, modelsDev, api));
+			// Discovery selects IDs only. Gather metadata after the user picks models.
+			const picked = await pickMany(ctx, "Select models", probed.ids.map(id => ({ value: id, label: id })));
 			if (!picked || picked.length === 0) return null;
 
-			const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, gatewayWide, modelsDev, api);
-			return { ids: picked, infoById, baseUrl };
+			const infoById = await collectProbedModelInfo(
+				ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, undefined, undefined, api,
+			);
+			const options = await reviewModelEntries(ctx, picked, infoById, api);
+			return options ? { ids: picked, infoById, baseUrl, options } : null;
 		} catch (error) {
 			const schemeHint = hasExplicitScheme(trimmedEndpointInput) ? "" : " No http:// or https:// was provided.";
 			ctx.ui.notify(`Auto probe failed: ${error instanceof Error ? error.message : String(error)}.${schemeHint}`, "warning");
@@ -261,7 +250,7 @@ async function addCustom(ctx: CommandContext) {
 		apiKey,
 		dedupe(collected.ids),
 		// The reasoning ceiling for thinking models defaults to xhigh; image /
-		// context / reasoning come from the probe (models.dev, local rules,
+		// context / reasoning come from the probe (models.dev,
 		// then model-probe defaults). Tune per model later via Edit provider →
 		// Edit a model.
 		{ reasoning: "xhigh", image: true },
@@ -277,14 +266,12 @@ async function addCustom(ctx: CommandContext) {
 	const probedCount = infoById
 		? collected.ids.filter((id) => {
 				const info = infoById.get(id);
-				return info && !info.inferred && probeInfoSummary(info).length > 0;
+				return info && probeInfoSummary(info).length > 0;
 			}).length
 		: 0;
-	const inferredCount = infoById ? collected.ids.filter((id) => infoById.get(id)?.inferred).length : 0;
-	const defaultedCount = collected.ids.length - probedCount - inferredCount;
+	const defaultedCount = collected.ids.length - probedCount;
 	const summary: string[] = [];
 	if (probedCount > 0) summary.push(`detected ${probedCount}`);
-	if (inferredCount > 0) summary.push(`inferred from known models ${inferredCount}`);
 	if (defaultedCount > 0) summary.push(`defaults ${defaultedCount}`);
 	ctx.ui.notify(
 		`Saved provider "${providerId}" to ${MODELS_JSON_PATH}` + (summary.length > 0 ? ` — context/image/reasoning: ${summary.join(", ")}` : ""),

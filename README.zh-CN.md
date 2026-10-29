@@ -21,16 +21,15 @@ provider——无需手工编辑配置文件。
   `/model_group/info`、站点公开目录、OpenAI `GET /models/{id}`、列表内联
   元数据、Ollama 原生 API)和 models.dev 学习。见
   [元数据如何解析](#元数据如何解析)。
-- **重新探测并对账** —— 再次查询 `/models`,在一个三态列表里统一处理:
-  新模型、元数据更新(`context 128000 -> 1000000`、`image [+]`、
-  `max-out 8192 -> 32000`)、端点不再返回的模型(标记 `unsupported`)。
-  `[x]` 应用、`[-]` 保留已存元数据、`[ ]` 移除/跳过。
+- **刷新模型信息（Refresh models）** —— 发现模型并更新资料。
+  列表只控制添加/保留或移除/跳过模型；端点不再返回的模型标记为
+  `unsupported`。查到的信息自动更新，明确手动编辑的字段保留手动值。
 - **事后一切可改** —— 逐模型字段(reasoning 上限、图像输入、上下文窗口、
   最大输出 token、headers/端点覆盖)、批量删除模型、provider 的 API
   flavor、端点、重命名、删除。
-- **合理且诚实的默认值** —— 实测值优先;推测值在选择器中带标记
-  (`[models.dev]` / `[local rules]`);默认值填充的项不显示。目录里的
-  退化数据(`maxTokens == contextWindow`)会自动钳制。
+- **合理且诚实的默认值** —— 实测值优先;目录资料在选择器中带标记
+  (`[models.dev]`);运行回退保留来源标记,不作为实测能力展示。
+  查询到的目录限制保持原样,不再用启发式算法钳制。
 - **developer role 探测** —— 拒绝 OpenAI `developer` 角色的端点(比如
   Kimi 订阅端点)会自动写入 `compat.supportsDeveloperRole: false`,pi 就会
   继续发 `system` 而不是报 400。
@@ -73,7 +72,7 @@ pi install git:github.com/PeiloViolet/pi-custom-provider@v1.6.0-fix.2
 
 ### 编辑
 
-选择一个 provider,然后:**重新探测模型**(如上对账)、**逐模型编辑**、
+选择一个 provider,然后:**刷新模型信息（Refresh models）**(如上所述)、**逐模型编辑**、
 **删除模型**(批量)、**手动添加模型**、**API flavor**、**Endpoint**、
 **重命名 provider**、**删除 provider**。
 
@@ -91,17 +90,17 @@ pi install git:github.com/PeiloViolet/pi-custom-provider@v1.6.0-fix.2
    和 `supported_endpoint_types`)、Gemini 的 `inputTokenLimit`、Ollama 的
    `/api/tags` + `/api/show`。
 2. **models.dev** —— 精确到单个模型的目录条目,标记 `[models.dev]`。
-3. **本地规则** —— 内置知名模型表(OpenAI、Anthropic、DeepSeek、Qwen、
-   Kimi、GLM、Gemini 等),标记 `[local rules]`。匹配前会先归一化 id,
-   所以中转装饰过的 id(`bailian/deepseek-v4-pro`、`gpt-5@20250807`、
-   `claude-sonnet-4-6[1m]`)也能命中。可通过 `~/.model-probe-rules.json`
-   扩展(见
-   [model-probe](https://github.com/real-wudaoshi/model-probe#custom-rules))。
-4. **协议兜底** —— 其他来源都不知道时,按协议给限制值(anthropic
-   200K/32K、google 1M/64K、openai 258K/32K)。
-5. **默认值** —— `image: false`、`video: false`、`reasoning: true`。
+3. **统一运行回退** —— 所有 API 的输出限制缺失时使用 32,000 tokens;
+   图片、视频默认关闭,推理默认开启。这些属于扩展的运行设置,来源保存到
+   `defaultedFields`,不作为查询得到的模型事实。
 
-重新探测时只有第 1–2 层的值会改写已有配置;推测值和默认值只是新模型的
+自动上下文是扩展的运行策略:取查询到的容量的一半、向下取整且至少为 1。
+容量 1,050,000 对应运行窗口 525,000。没有容量资料时统一使用 65,536
+的运行回退。模型行区分 `50%` 和 `runtime fallback`;运行窗口
+不再描述成查询得到的模型默认值。手动窗口继续保留。解析器不会通过字段
+名称推导独立的模型默认窗口,也不引入 Codex 专用的上下文元数据。
+
+刷新模型信息时只有第 1–2 层的值会改写已有配置;默认值只是新模型的
 起点。视频输入会被探测并作为选择器标签展示,但 pi 的模型配置没有 video
 字段,仅用于展示。
 
@@ -111,8 +110,7 @@ pi install git:github.com/PeiloViolet/pi-custom-provider@v1.6.0-fix.2
 内联 `pricing`),或模型命中 models.dev 目录条目时,扩展会把 pi 的
 `cost` 字段(每百万 token 美元价:input / output / cacheRead /
 cacheWrite)写进模型条目——和内置 provider 自带的字段一致——这样 pi 的
-用量统计也能给自定义 provider 估算会话成本。价格绝不猜测:没有本地规则,
-没有默认值。中转网关显示的价格是官方标价,可能与中转实际计费不同。
+用量统计也能给自定义 provider 估算会话成本。价格不使用推测值或默认值。中转网关显示的价格是官方标价,可能与中转实际计费不同。
 
 ## 存储
 

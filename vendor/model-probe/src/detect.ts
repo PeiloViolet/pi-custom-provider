@@ -1,8 +1,6 @@
-import { applyKnownModelFallback } from "./known-models.ts";
 import { probeDeveloperRole } from "./developer-role.ts";
 import { fetchModelsDevInfoForBaseUrl } from "./modelsdev.ts";
 import {
-	API_FALLBACK_LIMITS,
 	applyModelDefaults,
 	enrichLiteLLMModelGroupInfo,
 	enrichLiteLLMModelInfo,
@@ -20,17 +18,14 @@ export interface DetectOptions {
 	profile?: DetectProfile;
 	/** Use Ollama native endpoints (/api/tags, /api/show) instead of OpenAI per-model details. */
 	ollama?: boolean;
-	/** Fill remaining gaps from the built-in known-model rules (default true). */
-	knownModelFallback?: boolean;
-	/** pi model api flavor (openai-completions, anthropic-messages, ...): enables
-	 * protocol-level fallback limits when no other source knows them. */
+	/** Accepted for caller compatibility. Runtime defaults do not depend on API flavor. */
 	api?: string;
 	/** Also probe whether the gateway accepts the OpenAI "developer" role (one tiny chat completion). */
 	developerRole?: boolean;
 }
 
 export interface DetectResult extends ProbeResult {
-	/** Final per-model metadata: inline list fields + gateway-wide + per-model + models.dev + local rules. */
+	/** Final per-model metadata: inline list fields + gateway-wide + per-model + models.dev. */
 	models: Map<string, ModelProbeInfo>;
 	/** Developer-role support (probed value, or the default false), when requested via DetectOptions.developerRole. */
 	supportsDeveloperRole?: boolean;
@@ -93,8 +88,7 @@ export async function fetchPerModelInfo(
 }
 
 // Fill still-unknown fields from the models.dev catalog (matched by base URL
-// upstream), tagging them in modelsDevFields. Runs before the local rules: a
-// catalog entry is curated per-model data, while a rule is a regex guess.
+// upstream), tagging them in modelsDevFields.
 function applyModelsDevFallback(info: ModelProbeInfo | undefined, modelsDev: ModelProbeInfo | undefined): ModelProbeInfo | undefined {
 	if (!modelsDev) return info;
 	const out: ModelProbeInfo = { ...(info ?? {}) };
@@ -111,43 +105,21 @@ function applyModelsDevFallback(info: ModelProbeInfo | undefined, modelsDev: Mod
 	return out;
 }
 
-// Protocol-level limits, below the local rules and above nothing — the last
-// word before a field stays unknown. Tagged as defaulted so callers can tell
-// it apart from real data (and don't display it as a confident label).
-function applyApiFallback(info: ModelProbeInfo, api: string | undefined): ModelProbeInfo {
-	const fallback = api ? API_FALLBACK_LIMITS[api] : undefined;
-	if (!fallback) return info;
-	const out: ModelProbeInfo = { ...info };
-	const defaulted: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning"> = [...(info.defaultedFields ?? [])];
-	if (out.contextWindow === undefined) {
-		out.contextWindow = fallback.contextWindow;
-		defaulted.push("contextWindow");
-	}
-	if (out.maxTokens === undefined) {
-		out.maxTokens = fallback.maxTokens;
-		defaulted.push("maxTokens");
-	}
-	out.defaultedFields = defaulted;
-	return out;
-}
-
 // Resolve the final metadata for one model: detected values win, then the
-// models.dev catalog (exact per-model entries), then the local rules (regex
-// guesses, matched against normalized id candidates), then protocol-level
-// fallback limits for the given api flavor, then MODEL_INFO_DEFAULTS. The
-// source of each filled field is tagged (modelsDevFields / inferredFields /
-// defaultedFields).
+// models.dev catalog (exact per-model entries), then uniform runtime fallbacks
+// in MODEL_INFO_DEFAULTS. Filled fields are tagged with modelsDevFields
+// or defaultedFields.
 export function resolveModelInfo(
 	modelId: string,
 	info?: ModelProbeInfo,
 	modelsDev?: Map<string, ModelProbeInfo>,
-	api?: string,
+	_api?: string,
 ): ModelProbeInfo {
-	return applyModelDefaults(applyApiFallback(applyKnownModelFallback(modelId, applyModelsDevFallback(info, modelsDev?.get(modelId))) ?? {}, api));
+	return applyModelDefaults(applyModelsDevFallback(info, modelsDev?.get(modelId)));
 }
 
 // Merge metadata maps for `ids` (later maps win) and resolve each id through
-// models.dev + the local rules + the api fallback + defaults.
+// models.dev + uniform runtime fallbacks.
 export function finalizeModelInfo(
 	ids: string[],
 	maps: Array<Map<string, ModelProbeInfo>>,
@@ -168,7 +140,7 @@ export function finalizeModelInfo(
 /**
  * Full detection: probe /models (with ±/v1 adaptation), then gather metadata
  * from gateway-wide endpoints, then per-model details for anything still
- * unknown, and finally the built-in known-model rules.
+ * unknown, then resolve catalog metadata and defaults.
  */
 export async function detectModels(baseUrl: string, options: DetectOptions = {}): Promise<DetectResult> {
 	const profile = { ...FULL_PROFILE, ...options.profile };
@@ -186,16 +158,13 @@ export async function detectModels(baseUrl: string, options: DetectOptions = {})
 	}
 
 	// models.dev catalog, matched to the probed base URL. Fetched like a
-	// gateway-wide source but applied ABOVE the local rules at finalize time.
+	// gateway-wide source and used to fill missing fields at finalize time.
 	let modelsDev = new Map<string, ModelProbeInfo>();
 	if (profile.modelsDev) {
 		modelsDev = await fetchModelsDevInfoForBaseUrl(probed.baseUrl);
 	}
 
-	const models =
-		options.knownModelFallback === false
-			? finalizeModelInfo([], [probed.infoById, gatewayWide, details])
-			: finalizeModelInfo(probed.ids, [probed.infoById, gatewayWide, details], { modelsDev, api: options.api });
+	const models = finalizeModelInfo(probed.ids, [probed.infoById, gatewayWide, details], { modelsDev, api: options.api });
 
 	const result: DetectResult = { ...probed, models };
 	if (options.developerRole) {

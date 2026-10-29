@@ -1,5 +1,4 @@
 import {
-	describeProbeInfo,
 	fetchGatewayWideInfo as probeGatewayWideInfo,
 	fetchModelsDevInfoForBaseUrl,
 	fetchModelsDevModels,
@@ -14,6 +13,10 @@ import { resolveApiKeyForProbe, serializeApiKey } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, removeProviderApiKey, saveModelsConfig, saveProviderApiKey } from "../config.ts";
 import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
+import { fillCatalogFallback } from "../catalog-fallback.ts";
+import { contextWindowSource, automaticContextWindow } from "../context-window.ts";
+import { promptModelMetadata } from "../ui/prompts.ts";
+import { selectOne } from "../ui/select.ts";
 import type { GatewayProbeProfile } from "../presets.ts";
 import type {
 	ApiKeyMode,
@@ -21,7 +24,6 @@ import type {
 	ModelOptions,
 	ModelProbeInfo,
 	ModelsConfig,
-	ProbeItem,
 	ProviderApi,
 	ProviderStyle,
 	SelectItem,
@@ -120,13 +122,22 @@ export function providerModelItems(provider: any): SelectItem[] {
 
 			const details: string[] = [];
 			if (model && typeof model === "object") {
+				const defaulted = new Set<string>(model.defaultedFields ?? []);
+				const tag = (field: string) => defaulted.has(field) ? " [runtime fallback]" : "";
 				if (model.reasoning === true) {
 					const opts = readModelOptions(model);
-					details.push(`reasoning:${opts.reasoning}`);
+					details.push(`reasoning:${opts.reasoning}${tag("reasoning")}${defaulted.has("effortOptions") ? " [default ceiling]" : ""}`);
 				}
-				if (Array.isArray(model.input) && model.input.includes("image")) details.push("image");
-				if (typeof model.contextWindow === "number") details.push(`context ${model.contextWindow}`);
-				if (typeof model.maxTokens === "number") details.push(`max-out ${model.maxTokens}`);
+				if (Array.isArray(model.input) && model.input.includes("image")) details.push(`image${tag("image")}`);
+				else if (defaulted.has("image")) details.push("image:off [runtime fallback]");
+				if (typeof model.contextWindow === "number") {
+					const source = model.manualFields?.includes("context") ? "manual"
+						: model.contextWindow === automaticContextWindow(model.maxContextWindow)
+							? contextWindowSource(model.maxContextWindow) : "stored";
+					details.push(`context ${model.contextWindow} [${source}]`);
+				}
+				if (typeof model.maxContextWindow === "number") details.push(`max-context ${model.maxContextWindow}`);
+				if (typeof model.maxTokens === "number") details.push(`max-out ${model.maxTokens}${tag("maxTokens")}`);
 				if (model.cost && typeof model.cost === "object") details.push(`$${model.cost.input}/$${model.cost.output} per 1M`);
 			}
 
@@ -138,6 +149,29 @@ export function providerModelItems(provider: any): SelectItem[] {
 			};
 		})
 		.filter((item: any): item is SelectItem => item !== null);
+}
+
+// Review all collected models in the same list used by Edit per model. Opening
+// a row edits a draft; only Done returns the options for provider persistence.
+export async function reviewModelEntries(
+	ctx: CommandContext, ids: string[], infoById: Map<string, ModelProbeInfo>, api: ProviderApi,
+): Promise<Map<string, ModelOptions> | null> {
+	const options = new Map(ids.map((id) => [id, modelOptionsFromProbe(
+		resolveModelInfo(id, infoById.get(id), undefined, api), { reasoning: "xhigh", image: false },
+	)]));
+	let cursor = 0;
+	while (true) {
+		const items = providerModelItems({ models: ids.map((id) => buildModelEntry(id, options.get(id)!)) });
+		const choice = await selectOne(ctx, "Edit models", [
+			...items,
+			{ value: "\u0000done", label: "Done", description: "Use these models and save the provider" },
+		], { initialIndex: cursor });
+		if (choice === null) return null;
+		if (choice === "\u0000done") return options;
+		cursor = items.findIndex((item) => item.value === choice);
+		const edited = await promptModelMetadata(ctx, `Edit ${choice}`, options.get(choice)!);
+		if (edited) options.set(choice, edited);
+	}
 }
 
 function normalizeStoredEndpoint(provider: any): string {
@@ -247,8 +281,7 @@ export async function addModelEntriesToProvider(
 	providerId: string,
 	ids: string[],
 	infoById?: Map<string, ModelProbeInfo>,
-	// Explicit per-model options from the manual metadata prompts; wins over
-	// the resolved values (contextWindow falls back to resolved when unset).
+	// Confirmed per-model options win over resolved values, including clears.
 	optionOverrides?: Map<string, ModelOptions>,
 ) {
 	const existing = new Set<string>();
@@ -264,9 +297,9 @@ export async function addModelEntriesToProvider(
 		return;
 	}
 
-	// Added models default to reasoning on (xhigh ceiling); image, context and
-	// max-out come from the probe, then models.dev, then the local rules, then
-	// the api fallback, then model-probe's defaults (image off, reasoning on).
+	// Queries win; missing values use uniform runtime fallbacks. Reasoning
+	// defaults on with an xhigh ceiling, and image defaults off. Provenance is
+	// saved so these settings are not shown as queried model capabilities.
 	// Tune per model later via Edit provider → Edit a model.
 	const defaultOpts: ModelOptions = { reasoning: "xhigh", image: true };
 	let detectedCount = 0;
@@ -277,13 +310,7 @@ export async function addModelEntriesToProvider(
 			const mergedInfo = resolveModelInfo(id, infoById?.get(id), undefined, api);
 			if (probeInfoSummary(mergedInfo).length > 0) detectedCount++;
 			const override = optionOverrides?.get(id);
-			const opts = override
-				? {
-						...override,
-						contextWindow: override.contextWindow ?? mergedInfo.contextWindow,
-						maxTokens: override.maxTokens ?? mergedInfo.maxTokens,
-					}
-				: modelOptionsFromProbe(mergedInfo, defaultOpts);
+			const opts = override ?? modelOptionsFromProbe(mergedInfo, defaultOpts);
 			models.push(buildModelEntry(id, opts));
 		}
 		p.models = models;
@@ -312,22 +339,6 @@ export async function fetchGatewayWideInfo(
 	return probeGatewayWideInfo(baseUrl, { apiKey: resolveApiKeyForProbe(apiKey.mode, apiKey.value), profile });
 }
 
-// Build picker items for probed model ids, resolved through the models.dev
-// catalog, the local rules, and defaults. describeProbeInfo only renders values
-// that differ from the defaults, tagged [models.dev] / [local rules] by source.
-export function probePickerItems(
-	ids: string[],
-	infoById: Map<string, ModelProbeInfo>,
-	modelsDev?: Map<string, ModelProbeInfo>,
-	api?: ProviderApi,
-): ProbeItem[] {
-	return ids.map((id) => ({
-		value: id,
-		label: id,
-		description: describeProbeInfo(resolveModelInfo(id, infoById.get(id), modelsDev, api)),
-	}));
-}
-
 export async function collectProbedModelInfo(
 	ctx: CommandContext,
 	style: ProviderStyle,
@@ -337,8 +348,7 @@ export async function collectProbedModelInfo(
 	listInfo: Map<string, ModelProbeInfo>,
 	gatewayWide?: Map<string, ModelProbeInfo>,
 	modelsDev?: Map<string, ModelProbeInfo>,
-	// The provider's api flavor — enables model-probe's protocol-level
-	// fallback limits when nothing else knows them.
+	// Accepted by model-probe for compatibility; runtime fallbacks are uniform.
 	api?: ProviderApi,
 ): Promise<Map<string, ModelProbeInfo>> {
 	ctx.ui.notify("Fetching model metadata (context, max-out, image/video, reasoning) ...", "info");
@@ -346,12 +356,6 @@ export async function collectProbedModelInfo(
 	const resolvedKey = resolveApiKeyForProbe(apiKey.mode, apiKey.value);
 
 	const gw = gatewayWide ?? (await fetchGatewayWideInfo(style, apiKey, baseUrl, profile));
-
-	// models.dev catalog tier (exact per-model entries — above local rules,
-	// below detected values), matched by base URL. One cached call; empty when
-	// the endpoint isn't a known provider.
-	const dev =
-		modelsDev ?? (profile.modelsDev && style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(baseUrl) : undefined);
 
 	// Per-model details for the picked ids. Skipped when a gateway-wide source
 	// already answered for everything (LiteLLM's /models/{id} has no metadata).
@@ -362,9 +366,16 @@ export async function collectProbedModelInfo(
 		details = await fetchPerModelInfo(baseUrl, ids, { apiKey: resolvedKey });
 	}
 
-	// Merge (later maps win) and resolve: models.dev, then local rules, then
-	// the api fallback, then defaults.
-	return finalizeModelInfo(ids, [listInfo, gw, details], { modelsDev: dev, api });
+	// Resolve catalog fallback below gateway values. The add flow reviews the
+	// complete model list after all metadata has been collected.
+	const detected = new Map<string, ModelProbeInfo>();
+	for (const map of [listInfo, gw, details]) {
+		for (const [id, info] of map) detected.set(id, { ...detected.get(id), ...info });
+	}
+	const dev = profile.modelsDev && style !== "ollama"
+		? await fetchAutomaticCatalogInfo(ctx, baseUrl, ids, modelsDev)
+		: modelsDev;
+	return finalizeModelInfo(ids, [detected], { modelsDev: dev, api });
 }
 
 // The ollama style leaves a compat object with BOTH flags false; every other
@@ -389,6 +400,20 @@ export function providerStyleOf(provider: unknown): ProviderStyle {
 }
 
 export type ModelsDevOption = { providerId: string; key: string; info: ModelProbeInfo; rank: number };
+
+// Custom relay URLs rarely match a catalog provider. Reuse the manual refresh
+// lookup automatically, retaining endpoint metadata above catalog values.
+export async function fetchAutomaticCatalogInfo(
+	ctx: CommandContext,
+	baseUrl: string,
+	ids: string[],
+	matched?: Map<string, ModelProbeInfo>,
+): Promise<Map<string, ModelProbeInfo>> {
+	const endpointInfo = matched ?? await fetchModelsDevInfoForBaseUrl(baseUrl);
+	return fillCatalogFallback(ids, endpointInfo, fetchModelsDevOptionsForModel, (id, option) => {
+		ctx.ui.notify(`${id}: metadata from models.dev (${option.providerId}/${option.key}).`, "info");
+	});
+}
 
 // Look up every models.dev catalog entry matching a model id, across all
 // providers, ignoring which endpoint the local provider points at. Relay
@@ -438,12 +463,6 @@ export async function fetchModelsDevOptionsForModel(modelId: string): Promise<Mo
 	for (const candidate of normalizeModelIdCandidates(modelId)) {
 		const segments = candidate.split("/");
 		const keys = segments.length > 1 ? segments.slice(1).map((_, i) => segments.slice(i + 1).join("/")) : [candidate];
-		for (let i = 0; i < segments.length - 1; i++) {
-			const vendor = segments[i];
-			for (const key of keys) {
-				if (tables.has(vendor)) collect(vendor, key, 0);
-			}
-		}
 		for (const key of keys) {
 			const holders = [...tables.keys()]
 				.filter(providerId => tables.get(providerId)?.has(key))

@@ -2,10 +2,8 @@
 // their base URLs) and per-provider model metadata (context window, image,
 // video, reasoning, effort options).
 //
-// In the metadata priority order models.dev sits ABOVE the local known-model
-// rules: a catalog entry is curated per-model data, while a rule is a regex
-// guess. Detected > models.dev > local rule > default. Fields filled from
-// here are tagged in modelsDevFields.
+// Catalog entries fill fields the gateway did not report. Priority:
+// detected > models.dev > defaults. Fields filled here use modelsDevFields.
 //
 // Data comes from the official models.dev SDK (@opencode-ai/models), three
 // sources in order:
@@ -20,7 +18,6 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Models } from "@opencode-ai/models";
 import type { Model, ProviderMap } from "@opencode-ai/models";
-import { normalizeModelLimits } from "./probe.ts";
 import { PROBE_TIMEOUT_MS } from "./types.ts";
 import type { ModelProbeInfo } from "./types.ts";
 
@@ -131,13 +128,6 @@ function parseModelEntry(model: Model): ModelProbeInfo | undefined {
 
 	if (Number.isFinite(model.limit?.context) && model.limit.context > 0) info.contextWindow = model.limit.context;
 	if (Number.isFinite(model.limit?.output) && model.limit.output > 0) info.maxTokens = model.limit.output;
-	// Data hygiene: catalogs publish degenerate limits (output == context) for
-	// models whose real output cap is unknown — clamp before anyone consumes it.
-	if (info.contextWindow !== undefined && info.maxTokens !== undefined) {
-		const limited = normalizeModelLimits(info.contextWindow, info.maxTokens);
-		info.contextWindow = limited.contextWindow;
-		info.maxTokens = limited.maxTokens;
-	}
 	if (Array.isArray(model.modalities?.input)) {
 		info.image = model.modalities.input.includes("image");
 		info.video = model.modalities.input.includes("video");

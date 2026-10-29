@@ -22,17 +22,17 @@ LLM providers — no hand-editing of config files required.
   itself (LiteLLM `/model/info` + `/model_group/info`, site public catalogs,
   OpenAI `GET /models/{id}`, inline list metadata, Ollama native API) and from
   models.dev. See [How metadata is resolved](#how-metadata-is-resolved).
-- **Re-probe to reconcile** — query `/models` again and review everything in
-  one tri-state list: new models, metadata updates (`context 128000 ->
-  1000000`, `image [+]`, `max-out 8192 -> 32000`), and vanished models flagged
-  `unsupported`. `[x]` apply, `[-]` keep stored metadata, `[ ]` remove/skip.
+- **Refresh models** — discover models and update their information.
+  The list controls adding/keeping or removing/skipping models; unavailable
+  models are flagged `unsupported`. Found metadata updates automatically,
+  while explicitly edited fields retain their manual values.
 - **Edit everything afterwards** — per-model fields (reasoning ceiling, image
   input, context window, max output tokens, headers/endpoint override), bulk
   model delete, provider API flavor, endpoint, rename, delete.
-- **Sensible, honest defaults** — detected values win; guesses are tagged
-  (`[models.dev]` / `[local rules]`) in the picker; default-filled values are
-  not shown at all. Degenerate catalog limits (`maxTokens == contextWindow`)
-  are clamped automatically.
+- **Sensible, honest defaults** — detected values win; catalog values are
+  tagged `[models.dev]` in the picker; default-filled capability values are
+  not shown as detected data. Runtime fallbacks retain their source markers;
+  queried catalog limits are preserved without heuristic clamping.
 - **Developer-role probe** — endpoints that reject the OpenAI `developer` role
   (e.g. Kimi's subscription endpoint) get `compat.supportsDeveloperRole: false`
   automatically, so pi keeps sending `system` instead of failing with a 400.
@@ -74,7 +74,7 @@ or **Delete provider**.
 
 ### Edit
 
-Pick a provider, then: **Re-probe for models** (reconcile as above),
+Pick a provider, then: **Refresh models** (as above),
 **Edit per model**, **Delete models**, **Add models manually**, **API flavor**,
 **Endpoint**, **Rename provider**, or **Delete provider**.
 
@@ -92,17 +92,19 @@ Every field is resolved in tiers, highest priority first:
    and `supported_endpoint_types`), Gemini `inputTokenLimit`, Ollama
    `/api/tags` + `/api/show`.
 2. **models.dev** — exact per-model catalog entries, tagged `[models.dev]`.
-3. **Local rules** — a built-in known-model table (OpenAI, Anthropic, DeepSeek,
-   Qwen, Kimi, GLM, Gemini, ...), tagged `[local rules]`. Ids are normalized
-   first, so relay-decorated ids (`bailian/deepseek-v4-pro`, `gpt-5@20250807`,
-   `claude-sonnet-4-6[1m]`) still match. Extend it via
-   `~/.model-probe-rules.json` (see
-   [model-probe](https://github.com/real-wudaoshi/model-probe#custom-rules)).
-4. **API fallback** — protocol-level limits (anthropic 200K/32K, google 1M/64K,
-   openai 258K/32K) when nothing else knows them.
-5. **Defaults** — `image: false`, `video: false`, `reasoning: true`.
+3. **Runtime fallbacks** — missing output limits use 32,000 tokens for every
+   API; image/video default off and reasoning defaults on. These are extension
+   settings, persisted in `defaultedFields`, not queried model facts.
 
-Only tiers 1–2 ever rewrite an existing entry during re-probe; guesses and
+Automatic context is an extension runtime policy: use half the queried
+capacity, rounded down (minimum one token), so a 1,050,000 capacity gives a
+525,000 active window. With no capacity data, use the uniform 65,536 runtime
+window. Rows distinguish `50%` and `runtime fallback`; the active
+window is never described as a queried model default. Manual windows remain
+protected. The parser does not infer a separate model default from field names
+or import Codex-specific context metadata.
+
+Only tiers 1–2 ever rewrite an existing entry during model refresh;
 defaults are starting points for new models. Video input is tracked and shown
 as a picker tag, but pi's model config has no video slot, so it is
 display-only.
@@ -114,7 +116,7 @@ OpenRouter inline `pricing`) or the model matches a models.dev catalog entry,
 the extension writes pi's `cost` field (USD per 1M tokens: input / output /
 cacheRead / cacheWrite) into each model entry — the same field built-in
 providers carry — so pi's usage accounting can estimate session cost for
-custom providers too. Cost is never guessed: no local rule, no default. Prices
+custom providers too. Cost is never guessed or defaulted. Prices
 for relay gateways are the maker's list prices, which may differ from what the
 relay actually bills.
 

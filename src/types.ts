@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { ModelCostInfo } from "../vendor/model-probe/index.ts";
+import type { ModelCostInfo, ModelProbeInfo } from "../vendor/model-probe/index.ts";
 
 export type ProviderApi = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
 export type ProviderStyle = "openai" | "openai-responses" | "anthropic" | "ollama" | "gemini";
@@ -14,8 +14,14 @@ export const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "x
 export type ModelOptions = {
 	reasoning: ReasoningCeiling;
 	image: boolean;
+	// The runtime window and queried model capacity are distinct.
 	contextWindow?: number;
+	maxContextWindow?: number;
 	maxTokens?: number;
+	// Fields explicitly edited by the user; all others refresh automatically.
+	manualFields?: string[];
+	// Runtime fallbacks retained as provenance, not claimed as queried facts.
+	defaultedFields?: ModelProbeInfo["defaultedFields"];
 	// USD per 1M tokens, from the gateway or the models.dev catalog. Only real
 	// sources — never guessed.
 	cost?: ModelCostInfo;
