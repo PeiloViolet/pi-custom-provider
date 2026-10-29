@@ -13,26 +13,17 @@ registerHooks({
   return next(url, context);
  },
 });
-const { preferredCatalogOption, fillCatalogFallback } = await import('../src/catalog-fallback.ts');
-const { finalizeModelInfo } = await import('../vendor/model-probe/index.ts');
+const { fillCatalogFallback } = await import('../src/catalog-fallback.ts');
+const { finalizeModelInfo, fetchModelsDevModels } = await import('../vendor/model-probe/index.ts');
 const option = (providerId, key, info = { image: true }) => ({ providerId, key, info, rank: 0 });
 
-test('maker beats relay prefix and existing candidate order', () => {
- for (const [id, maker] of [
-  ['openrouter/openai/gpt-6.1-sol', 'openai'],
-  ['relay/claude-sonnet-5', 'anthropic'],
-  ['relay/gemini-3-pro', 'google'],
- ]) {
-  const native = option(maker, id);
-  assert.equal(preferredCatalogOption(id, [option('openrouter', id), native]), native);
+test('model names never override catalog lookup order', async () => {
+ for (const id of ['openrouter/openai/gpt-6.1-sol', 'relay/claude-sonnet-5', 'relay/gemini-3-pro', 'custom']) {
+  const first = option('first-provider', id, { image: false, contextWindow: 128000 });
+  const other = option('openai', id, { image: true, contextWindow: 1000000 });
+  const result = await fillCatalogFallback([id], new Map(), async () => [first, other]);
+  assert.deepEqual(result.get(id), first.info);
  }
-});
-
-test('unknown family or absent maker keeps established lookup order', () => {
- const relay = option('openrouter', 'custom');
- assert.equal(preferredCatalogOption('custom', [relay]), relay);
- assert.equal(preferredCatalogOption('gpt-custom', [relay]), relay);
- assert.equal(preferredCatalogOption('custom', []), undefined);
 });
 
 test('endpoint-matched catalog values win and input map is not mutated', async () => {
@@ -42,7 +33,7 @@ test('endpoint-matched catalog values win and input map is not mutated', async (
   return [option('openrouter', id, { image: false }), option('anthropic', id)];
  });
  assert.deepEqual(info.get('gpt-custom'), matched.get('gpt-custom'));
- assert.equal(info.get('claude-custom').image, true);
+ assert.equal(info.get('claude-custom').image, false);
  assert.equal(matched.has('claude-custom'), false);
 });
 
@@ -58,8 +49,8 @@ test('fallback supplies saved image/reasoning/limits while gateway values win pe
  const id = 'gpt-6.1-sol';
  const matched = [];
  const catalog = await fillCatalogFallback([id], new Map(), async () => [
-  option('openrouter', id, { image: false }),
   option('openai', id, { image: true, reasoning: true, contextWindow: 1000000, maxTokens: 64000 }),
+  option('openrouter', id, { image: false }),
  ], (modelId, entry) => matched.push([modelId, entry.providerId]));
  const resolved = finalizeModelInfo([id], [new Map([[id, { maxTokens: 8192, reasoning: false }]])], {
   modelsDev: catalog, api: 'openai-responses',
@@ -70,4 +61,21 @@ test('fallback supplies saved image/reasoning/limits while gateway values win pe
  assert.equal(resolved.reasoning, false);
  assert.ok(resolved.modelsDevFields.includes('image'));
  assert.deepEqual(matched, [[id, 'openai']]);
+});
+
+test('catalog output limits are preserved without local clamping', async () => {
+ const previousFetch = globalThis.fetch;
+ const models = Object.fromEntries([64000, 100000].map(output => [String(output), {
+  id: String(output), limit: { context: 64000, output }, reasoning: true,
+ }]));
+ try {
+  globalThis.fetch = async () => new Response(JSON.stringify({ fixture: { id: 'fixture', models } }), { status: 200 });
+  const result = await fetchModelsDevModels('fixture');
+  for (const output of [64000, 100000]) {
+   assert.equal(result.get(String(output))?.contextWindow, 64000);
+   assert.equal(result.get(String(output))?.maxTokens, output);
+  }
+ } finally {
+  globalThis.fetch = previousFetch;
+ }
 });

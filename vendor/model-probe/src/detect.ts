@@ -1,7 +1,6 @@
 import { probeDeveloperRole } from "./developer-role.ts";
 import { fetchModelsDevInfoForBaseUrl } from "./modelsdev.ts";
 import {
-	API_FALLBACK_LIMITS,
 	applyModelDefaults,
 	enrichLiteLLMModelGroupInfo,
 	enrichLiteLLMModelInfo,
@@ -19,8 +18,7 @@ export interface DetectOptions {
 	profile?: DetectProfile;
 	/** Use Ollama native endpoints (/api/tags, /api/show) instead of OpenAI per-model details. */
 	ollama?: boolean;
-	/** pi model api flavor (openai-completions, anthropic-messages, ...): enables
-	 * output-token fallbacks when no other source knows them. Context is never defaulted. */
+	/** Accepted for caller compatibility. Runtime defaults do not depend on API flavor. */
 	api?: string;
 	/** Also probe whether the gateway accepts the OpenAI "developer" role (one tiny chat completion). */
 	developerRole?: boolean;
@@ -108,37 +106,21 @@ function applyModelsDevFallback(info: ModelProbeInfo | undefined, modelsDev: Mod
 	return out;
 }
 
-// Output-token defaults, below detected and catalog values — the last
-// word before a field stays unknown. Tagged as defaulted so callers can tell
-// it apart from real data (and don't display it as a confident label).
-function applyApiFallback(info: ModelProbeInfo, api: string | undefined): ModelProbeInfo {
-	const fallback = api ? API_FALLBACK_LIMITS[api] : undefined;
-	if (!fallback) return info;
-	const out: ModelProbeInfo = { ...info };
-	const defaulted: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning"> = [...(info.defaultedFields ?? [])];
-	if (out.maxTokens === undefined) {
-		out.maxTokens = fallback.maxTokens;
-		defaulted.push("maxTokens");
-	}
-	out.defaultedFields = defaulted;
-	return out;
-}
-
 // Resolve the final metadata for one model: detected values win, then the
-// models.dev catalog (exact per-model entries), then output-token fallbacks
-// and MODEL_INFO_DEFAULTS. Filled fields are tagged with modelsDevFields
+// models.dev catalog (exact per-model entries), then uniform runtime fallbacks
+// in MODEL_INFO_DEFAULTS. Filled fields are tagged with modelsDevFields
 // or defaultedFields.
 export function resolveModelInfo(
 	modelId: string,
 	info?: ModelProbeInfo,
 	modelsDev?: Map<string, ModelProbeInfo>,
-	api?: string,
+	_api?: string,
 ): ModelProbeInfo {
-	return applyModelDefaults(applyApiFallback(applyModelsDevFallback(info, modelsDev?.get(modelId)) ?? {}, api));
+	return applyModelDefaults(applyModelsDevFallback(info, modelsDev?.get(modelId)));
 }
 
 // Merge metadata maps for `ids` (later maps win) and resolve each id through
-// models.dev + the api fallback + defaults.
+// models.dev + uniform runtime fallbacks.
 export function finalizeModelInfo(
 	ids: string[],
 	maps: Array<Map<string, ModelProbeInfo>>,

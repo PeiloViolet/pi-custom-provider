@@ -1,7 +1,7 @@
 import { serializeApiKey } from "./api-key.ts";
 import { defaultContextWindow } from "./context-window.ts";
 import { SPLIT_AUTH } from "./config.ts";
-import { resolveModelInfo } from "../vendor/model-probe/index.ts";
+import { applyModelDefaults, MODEL_INFO_DEFAULTS, resolveModelInfo } from "../vendor/model-probe/index.ts";
 import { PI_THINKING_LEVELS, REASONING_LEVELS } from "./types.ts";
 import type {
 	ApiKeyMode,
@@ -54,7 +54,7 @@ function ceilingFromThinkingMap(map: Record<string, string | null>): ReasoningCe
 // thinking models. (model-probe also tracks video input, but pi's model config
 // only supports text/image, so it isn't carried into ModelOptions.)
 export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions): ModelOptions {
-	if (!info) return fallback;
+	info = applyModelDefaults(info);
 	const maximum = info.defaultedFields?.includes("contextWindow")
 		? fallback.maxContextWindow : info.contextWindow ?? fallback.maxContextWindow;
 	const initial = defaultContextWindow(maximum, info.defaultContextWindow ?? fallback.defaultContextWindow);
@@ -66,6 +66,7 @@ export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback
 		maxContextWindow: maximum,
 		maxTokens: info.maxTokens ?? fallback.maxTokens,
 		cost: info.cost ?? fallback.cost,
+		defaultedFields: [...(info.defaultedFields ?? [])],
 	};
 
 	if (info.reasoning === false) {
@@ -80,7 +81,8 @@ export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback
 			opts.reasoning = ceilingFromThinkingMap(map);
 			opts.thinkingLevelMap = map;
 		}
-		// reasoning === true with no level info: keep the wizard's default ceiling.
+		if (!info.alwaysThinking && !info.effortOptions?.length) opts.defaultedFields?.push("effortOptions");
+		// No reported levels: the configured ceiling is a runtime fallback.
 	}
 	return opts;
 }
@@ -126,9 +128,8 @@ export function buildModelEntry(
 		input: opts.image ? ["text", "image"] : ["text"],
 	};
 
-	if (typeof opts.contextWindow === "number" && opts.contextWindow > 0) {
-		entry.contextWindow = opts.contextWindow;
-	}
+	entry.contextWindow = typeof opts.contextWindow === "number" && opts.contextWindow > 0
+		? opts.contextWindow : defaultContextWindow(opts.maxContextWindow, opts.defaultContextWindow);
 	// Extension metadata; Pi uses contextWindow as the active window. Preserve
 	// the automatic model window and capacity when a manual window is selected.
 	if (typeof opts.defaultContextWindow === "number" && opts.defaultContextWindow > 0) {
@@ -137,10 +138,16 @@ export function buildModelEntry(
 	if (typeof opts.maxContextWindow === "number" && opts.maxContextWindow > 0) {
 		entry.maxContextWindow = opts.maxContextWindow;
 	}
-	if (typeof opts.maxTokens === "number" && opts.maxTokens > 0) {
-		entry.maxTokens = opts.maxTokens;
+	entry.maxTokens = typeof opts.maxTokens === "number" && opts.maxTokens > 0
+		? opts.maxTokens : MODEL_INFO_DEFAULTS.maxTokens;
+	const defaulted = new Set(opts.defaultedFields ?? []);
+	if (!(typeof opts.maxTokens === "number" && opts.maxTokens > 0)) defaulted.add("maxTokens");
+	for (const field of opts.manualFields ?? []) {
+		const key = field === "context" ? "contextWindow" : field === "maxtokens" ? "maxTokens" : field;
+		defaulted.delete(key as NonNullable<ModelProbeInfo["defaultedFields"]>[number]);
+		if (field === "reasoning") defaulted.delete("effortOptions");
 	}
-
+	if (defaulted.size) entry.defaultedFields = [...defaulted];
 	if (opts.manualFields?.length) entry.manualFields = [...opts.manualFields];
 
 	// List prices so pi's usage accounting can estimate cost for custom
@@ -184,7 +191,7 @@ export function buildProviderConfig(
 		...(!SPLIT_AUTH && serializedApiKey ? { apiKey: serializedApiKey } : {}),
 		models: modelIds.map((id) => {
 			// resolveModelInfo layers detected metadata over models.dev, the
-			// api fallback, and the built-in defaults — including for
+			// uniform runtime fallbacks — including for
 			// manually added models, which have no probe info at all.
 			const info = resolveModelInfo(id, infoById?.get(id), undefined, api);
 			const override = optionOverrides?.get(id);
@@ -213,15 +220,20 @@ export function buildProviderConfig(
 // Read the reasoning ceiling + image flag already stored on a model entry,
 // mirroring pi's getSupportedThinkingLevels so edit defaults match reality.
 export function readModelOptions(model: any): ModelOptions {
-	const image = Array.isArray(model?.input) ? model.input.includes("image") : true;
-	const contextWindow = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
+	const image = Array.isArray(model?.input) ? model.input.includes("image") : MODEL_INFO_DEFAULTS.image;
 	const maximum = typeof model?.maxContextWindow === "number" ? model.maxContextWindow : undefined;
+	const contextWindow = typeof model?.contextWindow === "number" ? model.contextWindow
+		: defaultContextWindow(maximum, model?.defaultContextWindow);
+	const defaulted = new Set<NonNullable<ModelProbeInfo["defaultedFields"]>[number]>(model?.defaultedFields ?? []);
+	if (!Array.isArray(model?.input)) defaulted.add("image");
+	if (!(typeof model?.maxTokens === "number" && model.maxTokens > 0)) defaulted.add("maxTokens");
 	const metadata = {
 		...(Array.isArray(model?.manualFields) ? { manualFields: [...model.manualFields] } : {}),
 		image, contextWindow,
 		maxContextWindow: maximum,
 		defaultContextWindow: typeof model?.defaultContextWindow === "number" ? model.defaultContextWindow : undefined,
-		maxTokens: typeof model?.maxTokens === "number" ? model.maxTokens : undefined,
+		maxTokens: typeof model?.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : MODEL_INFO_DEFAULTS.maxTokens,
+		defaultedFields: [...defaulted],
 		cost: model?.cost,
 	};
 	if (!model || model.reasoning !== true) return { ...metadata, reasoning: "off" };

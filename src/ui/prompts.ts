@@ -1,8 +1,8 @@
 import { BUILTIN_COLLISION_WARNING, BUILTIN_PROVIDER_IDS, loadModelsConfig } from "../config.ts";
-import { resolveModelInfo } from "../../vendor/model-probe/index.ts";
+import { MODEL_INFO_DEFAULTS, resolveModelInfo } from "../../vendor/model-probe/index.ts";
 import { REASONING_LEVELS } from "../types.ts";
 import { buildModelEntry, modelOptionsFromProbe } from "../model-entry.ts";
-import { defaultContextWindow } from "../context-window.ts";
+import { contextWindowSource, defaultContextWindow } from "../context-window.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ProviderApi, ProviderStyle, ReasoningCeiling, SelectItem } from "../types.ts";
 import { normalizeEndpoint, slugify, suggestProviderId } from "../url.ts";
 import { selectOne } from "./select.ts";
@@ -62,8 +62,8 @@ export async function promptImage(ctx: CommandContext, current?: boolean): Promi
 	return choice === "yes";
 }
 
-// Null leaves the field unchanged. Zero resets context to its default or
-// clears the output limit, as stated by each caller's placeholder.
+// Null leaves the field unchanged. Zero restores the runtime policy,
+// as stated by each caller's placeholder.
 async function promptTokenCount(ctx: CommandContext, title: string, current: number | undefined, zeroAction: string): Promise<number | null> {
 	const value = await ctx.ui.input(title, `${current ? `current: ${current}` : "tokens"} (blank = keep, 0 = ${zeroAction})`);
 	if (value === undefined || !value.trim()) return null;
@@ -81,18 +81,24 @@ export async function promptContextWindow(ctx: CommandContext, current?: number)
 }
 
 export async function promptMaxTokens(ctx: CommandContext, current?: number): Promise<number | null> {
-	return promptTokenCount(ctx, "Max output tokens", current, "clear");
+	return promptTokenCount(ctx, "Max output tokens", current, "runtime fallback");
 }
 
 // The same capability fields and prompts serve staged and persisted models.
 export function modelMetadataItems(opts: ModelOptions): SelectItem[] {
 	const automaticWindow = defaultContextWindow(opts.maxContextWindow, opts.defaultContextWindow);
+	const defaulted = new Set<string>(opts.defaultedFields ?? []);
 	return [
 		{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → max)" },
 		{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
-		{ value: "context", label: "Context window", suffix: ` • ${opts.contextWindow ?? "unset"}`, description: `Default context: ${automaticWindow ?? "unknown"} • Maximum context: ${opts.maxContextWindow ?? "unknown"}. Select a window to use.` },
+		{ value: "context", label: "Context window", suffix: ` • ${opts.contextWindow ?? "unset"}`, description: `Automatic context: ${automaticWindow} [${contextWindowSource(opts.maxContextWindow, opts.defaultContextWindow)}] • Maximum context: ${opts.maxContextWindow ?? "not reported"}. Select a window to use.` },
 		{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${opts.maxTokens ?? "unset"}`, description: "Max tokens this model may generate" },
-	].map((item) => ({ ...item, suffix: `${item.suffix} • ${opts.manualFields?.includes(item.value) ? "manual" : "automatic"}` }));
+	].map((item) => {
+		const manual = opts.manualFields?.includes(item.value);
+		const field = item.value === "maxtokens" ? "maxTokens" : item.value;
+		const source = manual ? "manual" : defaulted.has(field) ? "runtime fallback" : "automatic";
+		return { ...item, suffix: `${item.suffix} • ${source}${!manual && field === "reasoning" && defaulted.has("effortOptions") ? " • default ceiling" : ""}` };
+	});
 }
 
 export async function editModelMetadataField(ctx: CommandContext, opts: ModelOptions, field: string): Promise<boolean> {
@@ -117,7 +123,7 @@ export async function editModelMetadataField(ctx: CommandContext, opts: ModelOpt
 	} else if (field === "context") {
 		const automaticWindow = defaultContextWindow(opts.maxContextWindow, opts.defaultContextWindow);
 		const choice = await selectOne(ctx, "Context window", [
-			{ value: "automatic", label: "Automatic", suffix: ` • ${automaticWindow ?? "unknown"}`, description: "Use the default context; update automatically when metadata is refreshed" },
+			{ value: "automatic", label: "Automatic", suffix: ` • ${automaticWindow}`, description: `Use ${contextWindowSource(opts.maxContextWindow, opts.defaultContextWindow)}; update automatically when metadata is refreshed` },
 			{ value: "manual", label: "Manual", description: `Enter a window size. Maximum context: ${opts.maxContextWindow ?? "unknown"}` },
 		], { initialIndex: opts.manualFields?.includes("context") ? 1 : 0 });
 		if (!choice) return false;
@@ -132,7 +138,12 @@ export async function editModelMetadataField(ctx: CommandContext, opts: ModelOpt
 	} else if (field === "maxtokens") {
 		const value = await promptMaxTokens(ctx, opts.maxTokens);
 		if (value === null) return false;
-		opts.maxTokens = value > 0 ? value : undefined;
+		opts.maxTokens = value > 0 ? value : MODEL_INFO_DEFAULTS.maxTokens;
+		manual = value > 0;
+		const defaulted = new Set(opts.defaultedFields ?? []);
+		if (manual) defaulted.delete("maxTokens");
+		else defaulted.add("maxTokens");
+		opts.defaultedFields = [...defaulted];
 	} else return false;
 	const fields = new Set(opts.manualFields ?? []);
 	if (manual) fields.add(field);

@@ -12,9 +12,8 @@ function usage(): never {
 Options:
   --key <apiKey>     Bearer token for the gateway
   --ollama           Use Ollama native endpoints (/api/tags, /api/show)
-  --api <flavor>     pi api flavor (openai-completions, openai-responses,
-                     anthropic-messages, google-generative-ai) — enables
-                     protocol-level fallback limits
+  --api <flavor>     Accepted for compatibility; runtime fallbacks are
+                     uniform and do not depend on the api flavor
   --developer-role   Also probe whether the gateway accepts the OpenAI
                      "developer" role (one tiny chat completion)
   --json             Print the raw result as JSON

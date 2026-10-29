@@ -30,11 +30,11 @@ registerHooks({
 });
 const { editModelMetadataField } = await import('../src/ui/prompts.ts');
 const { buildProviderConfig, buildModelEntry, readModelOptions } = await import('../src/model-entry.ts');
-const { reviewModelEntries } = await import('../src/flows/shared.ts');
-const { defaultContextWindow } = await import('../src/context-window.ts');
+const { reviewModelEntries, providerModelItems } = await import('../src/flows/shared.ts');
+const { defaultContextWindow, RUNTIME_CONTEXT_WINDOW } = await import('../src/context-window.ts');
 const { resolveModelInfo, normalizeModelIdCandidates, probeModels, enrichOpenAIModelDetails,
  enrichLiteLLMModelInfo, enrichLiteLLMModelGroupInfo, enrichPublicModelInfo } = await import('../vendor/model-probe/index.ts');
-const { diffStoredModel, applyMetaChanges, automaticMetadataFields } = await import('../src/model-metadata.ts');
+const { diffStoredModel, applyMetaChanges, applyModelFieldEdit, automaticMetadataFields } = await import('../src/model-metadata.ts');
 
 const native = { providerId: 'openai', key: 'gpt-test', rank: 1,
  info: { image: true, reasoning: true, contextWindow: 1000000, maxTokens: 64000,
@@ -94,8 +94,9 @@ test('a model row directly opens shared fields; edits survive returning to list 
  const config = buildProviderConfig('openai-responses', 'openai-responses', 'https://relay.example/v1',
   { mode: 'none' }, ['gpt-test'], { reasoning: 'xhigh', image: false }, undefined, info, undefined, options);
  assert.deepEqual(config.models[0].input, ['text', 'image']);
- assert.equal(config.models[0].maxTokens, undefined);
- assert.deepEqual(config.models[0].manualFields, ['image', 'maxtokens']);
+ assert.equal(config.models[0].maxTokens, 32000);
+ assert.deepEqual(config.models[0].manualFields, ['image']);
+ assert.ok(config.models[0].defaultedFields.includes('maxTokens'));
  assert.equal(relay.info.image, false);
  ui.done();
 });
@@ -136,7 +137,7 @@ test('Esc in the common model list cancels adding without accepting drafts', asy
  ui.done();
 });
 
-test('all model names and protocols take context only from model metadata', () => {
+test('all model names and protocols share the runtime window policy beneath metadata', () => {
  const ids = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-luna', 'claude-sonnet-4-6', 'gemini-2.5-pro', 'unknown'];
  const protocols = [['openai', 'openai-completions'], ['openai-responses', 'openai-responses'],
   ['anthropic', 'anthropic-messages'], ['gemini', 'google-generative-ai']];
@@ -147,14 +148,14 @@ test('all model names and protocols take context only from model metadata', () =
    const config = buildProviderConfig(style, api, 'https://relay.example/v1',
     { mode: 'none' }, ids, { reasoning: 'xhigh', image: false }, undefined, info);
    for (const model of config.models) {
-    assert.equal(model.contextWindow, maximum, `${api}: ${model.id}`);
+    assert.equal(model.contextWindow, maximum ? Math.floor(maximum / 2) : RUNTIME_CONTEXT_WINDOW, `${api}: ${model.id}`);
     assert.equal(model.maxContextWindow, maximum);
     assert.equal(readModelOptions(model).defaultContextWindow, undefined);
-    assert.equal(defaultContextWindow(readModelOptions(model).maxContextWindow), maximum);
+    assert.equal(defaultContextWindow(readModelOptions(model).maxContextWindow), maximum ? Math.floor(maximum / 2) : RUNTIME_CONTEXT_WINDOW);
     const fresh = { contextWindow: maximum ?? 1050000 };
     const stored = { ...model, contextWindow: 777777 };
     applyMetaChanges(stored, diffStoredModel(stored, fresh));
-    assert.equal(stored.contextWindow, fresh.contextWindow);
+    assert.equal(stored.contextWindow, Math.floor(fresh.contextWindow / 2));
     const manual = { ...model, contextWindow: 12345, manualFields: ['context'] };
     applyMetaChanges(manual, diffStoredModel(manual, fresh));
     assert.equal(manual.contextWindow, 12345);
@@ -169,7 +170,7 @@ test('review and Automatic editing preserve reported model defaults across save'
    const ui = scriptedUi([{ title: 'Edit models', search: 'Done' }]);
    const options = await reviewModelEntries(ui.ctx, ['any-model'], new Map(info ? [['any-model', info]] : []), api);
    const opts = options.get('any-model');
-   assert.equal(opts.contextWindow, info?.defaultContextWindow);
+   assert.equal(opts.contextWindow, info?.defaultContextWindow ?? RUNTIME_CONTEXT_WINDOW);
    assert.equal(opts.defaultContextWindow, info?.defaultContextWindow);
    assert.equal(opts.maxContextWindow, info?.contextWindow);
    ui.done();
@@ -177,11 +178,40 @@ test('review and Automatic editing preserve reported model defaults across save'
    const reopened = readModelOptions(saved);
    const reset = scriptedUi([{ title: 'Context window', search: 'Automatic' }]);
    assert.equal(await editModelMetadataField(reset.ctx, reopened, 'context'), true);
-   assert.equal(buildModelEntry('any-model', reopened).contextWindow, info?.defaultContextWindow);
+   assert.equal(buildModelEntry('any-model', reopened).contextWindow, info?.defaultContextWindow ?? RUNTIME_CONTEXT_WINDOW);
    assert.equal(reopened.manualFields, undefined);
    reset.done();
   }
  }
+});
+
+test('runtime provenance survives saving, manual edits and replacement with queried metadata', () => {
+ const config = buildProviderConfig('gemini', 'google-generative-ai', 'https://relay.example/v1',
+  { mode: 'none' }, ['unknown-model'], { reasoning: 'xhigh', image: false });
+ const model = config.models[0];
+ assert.equal(model.contextWindow, RUNTIME_CONTEXT_WINDOW);
+ assert.equal(model.maxTokens, 32000);
+ assert.deepEqual(model.input, ['text']);
+ assert.equal(model.maxContextWindow, undefined);
+ assert.equal(model.defaultContextWindow, undefined);
+ assert.ok(model.defaultedFields.includes('image'));
+ assert.ok(model.defaultedFields.includes('maxTokens'));
+ assert.ok(model.defaultedFields.includes('effortOptions'));
+ assert.match(providerModelItems(config)[0].suffix, /runtime fallback/);
+ assert.deepEqual(buildModelEntry(model.id, readModelOptions(model)).defaultedFields, model.defaultedFields);
+ const manual = buildModelEntry(model.id, { ...readModelOptions(model), image: true, manualFields: ['image'] });
+ assert.equal(manual.defaultedFields.includes('image'), false);
+ assert.ok(manual.defaultedFields.includes('maxTokens'));
+ applyMetaChanges(model, diffStoredModel(model, { contextWindow: 1050000, maxTokens: 128000,
+  image: false, reasoning: true, effortOptions: ['low', 'high', 'max'] }));
+ assert.equal(model.contextWindow, 525000);
+ assert.equal(model.maxContextWindow, 1050000);
+ assert.equal(model.defaultContextWindow, undefined);
+ assert.equal(model.defaultedFields?.includes('image') ?? false, false);
+ assert.equal(model.defaultedFields?.includes('maxTokens') ?? false, false);
+ assert.equal(model.defaultedFields?.includes('effortOptions') ?? false, false);
+ assert.match(providerModelItems({ models: [model] })[0].suffix, /context 525000 \[half capacity\]/);
+ assert.equal(readModelOptions('legacy-model').image, false);
 });
 
 test('model API does not invent context when reopening or refreshing metadata', () => {
@@ -231,11 +261,11 @@ test('model names supply no capability or capacity metadata', () => {
  for (const id of ['gpt-5.6-luna', 'gpt-6-astra', 'claude-sonnet-4-6', 'deepseek-v4-pro']) {
   const info = resolveModelInfo(id);
   assert.equal(info.contextWindow, undefined);
-  assert.equal(info.maxTokens, undefined);
+  assert.equal(info.maxTokens, 32000);
   assert.equal(info.image, false);
   assert.equal(info.video, false);
   assert.equal(info.reasoning, true);
-  assert.deepEqual(new Set(info.defaultedFields), new Set(['image', 'video', 'reasoning']));
+  assert.deepEqual(new Set(info.defaultedFields), new Set(['maxTokens', 'image', 'video', 'reasoning']));
  }
 });
 
@@ -257,16 +287,19 @@ test('default context stays separate from maximum capacity through acceptance an
  assert.equal(opts.defaultContextWindow, 272000);
  assert.equal(opts.maxContextWindow, 1050000);
  assert.equal(defaultContextWindow(200000, 272000), 200000);
- assert.equal(defaultContextWindow(1000000), 1000000);
+ assert.equal(defaultContextWindow(1000000), 500000);
+ assert.equal(defaultContextWindow(1050000), 525000);
+ assert.equal(defaultContextWindow(1001), 500);
+ assert.equal(defaultContextWindow(1), 1);
  assert.equal(defaultContextWindow(undefined, 272000), 272000);
- assert.equal(defaultContextWindow(), undefined);
+ assert.equal(defaultContextWindow(), RUNTIME_CONTEXT_WINDOW);
 });
 
-test('missing context metadata stays unknown and legacy windows remain untouched', () => {
+test('missing metadata uses a runtime window without inventing model default or capacity', () => {
  const config = buildProviderConfig('openai-responses', 'openai-responses', 'https://relay.example/v1',
   { mode: 'none' }, ['gpt-6.1-sol'], { reasoning: 'xhigh', image: false });
  const model = config.models[0];
- assert.equal(model.contextWindow, undefined);
+ assert.equal(model.contextWindow, RUNTIME_CONTEXT_WINDOW);
  assert.equal(model.maxContextWindow, undefined);
  const opts = readModelOptions(model);
  assert.equal(opts.defaultContextWindow, undefined);
@@ -309,12 +342,12 @@ test('automatic refresh replaces any legacy window even when maximum metadata al
  for (const previous of [undefined, 128000, 258000, 400000, 1050000]) {
   const model = { id: 'gpt-6.1-sol', contextWindow: previous, maxContextWindow: 1050000 };
   applyMetaChanges(model, diffStoredModel(model, { contextWindow: 1050000 }));
-  assert.equal(model.contextWindow, 1050000);
+  assert.equal(model.contextWindow, 525000);
   assert.equal(model.maxContextWindow, 1050000);
   assert.deepEqual(diffStoredModel(model, { contextWindow: 1050000 }), []);
  }
  const stringChanges = diffStoredModel('gpt-6.1-sol', { contextWindow: 1050000 });
- assert.equal(stringChanges.find(change => change.key === 'contextWindow').value, 1050000);
+ assert.equal(stringChanges.find(change => change.key === 'contextWindow').value, 525000);
 });
 
 test('partial capacity refresh preserves reported defaults without freezing capacity-only models', async () => {
@@ -341,8 +374,37 @@ test('partial capacity refresh preserves reported defaults without freezing capa
   applyMetaChanges(model, diffStoredModel(model, { contextWindow: capacity }));
   const reopened = readModelOptions(buildModelEntry(model.id, readModelOptions(model)));
   assert.equal(reopened.defaultContextWindow, undefined);
-  assert.equal(reopened.contextWindow, capacity);
+  assert.equal(reopened.contextWindow, Math.floor(capacity / 2));
  }
+});
+
+test('returning to automatic replaces missing formerly manual fields with runtime fallbacks', () => {
+ const model = { id: 'manual-model', contextWindow: 900000, maxTokens: 12345,
+  input: ['text', 'image'], reasoning: true, thinkingLevelMap: { high: 'manual-high' },
+  manualFields: ['context', 'maxtokens', 'image', 'reasoning'] };
+ applyMetaChanges(model, diffStoredModel(model, { contextWindow: 1050000 }, true));
+ assert.equal(model.contextWindow, 525000);
+ assert.equal(model.maxTokens, 32000);
+ assert.deepEqual(model.input, ['text']);
+ assert.equal(model.thinkingLevelMap.high, undefined);
+ assert.equal(model.thinkingLevelMap.xhigh, 'xhigh');
+ assert.equal(model.manualFields, undefined);
+ for (const field of ['maxTokens', 'image', 'reasoning', 'effortOptions']) assert.ok(model.defaultedFields.includes(field));
+});
+
+test('editing a legacy field persists provenance only for values that are saved', () => {
+ const model = { id: 'legacy-model' };
+ let edited = buildModelEntry(model.id, { ...readModelOptions(model), contextWindow: 20000, manualFields: ['context'] });
+ applyModelFieldEdit(model, edited, 'context');
+ assert.equal(model.contextWindow, 20000);
+ assert.equal(model.input, undefined);
+ assert.equal(model.maxTokens, undefined);
+ assert.equal(model.defaultedFields, undefined);
+ edited = buildModelEntry(model.id, readModelOptions(model));
+ applyModelFieldEdit(model, edited, 'maxtokens');
+ assert.equal(model.maxTokens, 32000);
+ assert.deepEqual(model.defaultedFields, ['maxTokens']);
+ assert.equal(model.input, undefined);
 });
 
 test('only manually edited fields survive refresh; other metadata and capacity still update', () => {
@@ -386,13 +448,13 @@ test('missing reasoning levels preserve an exact map while explicit disable clea
  assert.equal(automaticMetadataFields({ reasoning: true, defaultedFields: ['reasoning'] }).size, 0);
 });
 
-test('legacy string model editor leaves automatic context unknown', async () => {
+test('legacy string model editor supplies a runtime window in Automatic mode', async () => {
  const opts = readModelOptions('gpt-6.1-sol');
  assert.equal(opts.defaultContextWindow, undefined);
  const ui = scriptedUi([{ title: 'Context window', search: 'Automatic' }]);
  assert.equal(await editModelMetadataField(ui.ctx, opts, 'context'), true);
  const model = buildModelEntry('gpt-6.1-sol', opts);
- assert.equal(model.contextWindow, undefined);
+ assert.equal(model.contextWindow, RUNTIME_CONTEXT_WINDOW);
  assert.equal(model.manualFields, undefined);
  ui.done();
 });

@@ -1,10 +1,9 @@
 // Best-effort model metadata detected while probing a gateway.
 //
-// Every field has one of four sources, highest priority first:
+// Metadata and runtime fallbacks have these sources, highest priority first:
 //   1. detected   — real data from the gateway (no tag)
 //   2. models.dev — exact per-model catalog entries (listed in modelsDevFields)
-//   3. api fallback — output-token defaults when nothing else spoke (listed in defaultedFields)
-//   4. default    — filled from MODEL_INFO_DEFAULTS (listed in defaultedFields)
+//   3. runtime fallback — uniform MODEL_INFO_DEFAULTS (listed in defaultedFields)
 // USD per 1M tokens — pi's ModelCostRates convention (and models.dev's).
 // No default price: a guessed price is worse than none, so
 // cost only ever comes from the gateway itself or the models.dev catalog.
@@ -27,7 +26,7 @@ export type ModelProbeInfo = {
 	effortOptions?: string[]; // provider reasoning-effort names (none/minimal/low/.../max)
 	endpointTypes?: string[]; // New API / One API: supported_endpoint_types (chat, embeddings, ...)
 	modelsDevFields?: Array<"contextWindow" | "defaultContextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "cost">; // which fields came from models.dev
-	defaultedFields?: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning">; // which fields came from the api fallback / MODEL_INFO_DEFAULTS
+	defaultedFields?: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "effortOptions">; // runtime fallbacks, never queried model facts
 };
 
 export type ProbeResult = {

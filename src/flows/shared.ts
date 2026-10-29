@@ -15,7 +15,7 @@ import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, removeProvide
 import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import { fillCatalogFallback } from "../catalog-fallback.ts";
-import { defaultContextWindow } from "../context-window.ts";
+import { contextWindowSource, defaultContextWindow } from "../context-window.ts";
 import { promptModelMetadata } from "../ui/prompts.ts";
 import { selectOne } from "../ui/select.ts";
 import type { GatewayProbeProfile } from "../presets.ts";
@@ -124,14 +124,22 @@ export function providerModelItems(provider: any): SelectItem[] {
 
 			const details: string[] = [];
 			if (model && typeof model === "object") {
+				const defaulted = new Set<string>(model.defaultedFields ?? []);
+				const tag = (field: string) => defaulted.has(field) ? " [runtime fallback]" : "";
 				if (model.reasoning === true) {
 					const opts = readModelOptions(model);
-					details.push(`reasoning:${opts.reasoning}`);
+					details.push(`reasoning:${opts.reasoning}${tag("reasoning")}${defaulted.has("effortOptions") ? " [default ceiling]" : ""}`);
 				}
-				if (Array.isArray(model.input) && model.input.includes("image")) details.push("image");
-				if (typeof model.contextWindow === "number") details.push(`context ${model.contextWindow}`);
+				if (Array.isArray(model.input) && model.input.includes("image")) details.push(`image${tag("image")}`);
+				else if (defaulted.has("image")) details.push("image:off [runtime fallback]");
+				if (typeof model.contextWindow === "number") {
+					const source = model.manualFields?.includes("context") ? "manual"
+						: model.contextWindow === defaultContextWindow(model.maxContextWindow, model.defaultContextWindow)
+							? contextWindowSource(model.maxContextWindow, model.defaultContextWindow) : "stored";
+					details.push(`context ${model.contextWindow} [${source}]`);
+				}
 				if (typeof model.maxContextWindow === "number") details.push(`max-context ${model.maxContextWindow}`);
-				if (typeof model.maxTokens === "number") details.push(`max-out ${model.maxTokens}`);
+				if (typeof model.maxTokens === "number") details.push(`max-out ${model.maxTokens}${tag("maxTokens")}`);
 				if (model.cost && typeof model.cost === "object") details.push(`$${model.cost.input}/$${model.cost.output} per 1M`);
 			}
 
@@ -291,9 +299,9 @@ export async function addModelEntriesToProvider(
 		return;
 	}
 
-	// Added models default to reasoning on (xhigh ceiling); image, context and
-	// max-out come from the probe, then models.dev, then
-	// the api fallback, then model-probe's defaults (image off, reasoning on).
+	// Queries win; missing values use uniform runtime fallbacks. Reasoning
+	// defaults on with an xhigh ceiling, and image defaults off. Provenance is
+	// saved so these settings are not shown as queried model capabilities.
 	// Tune per model later via Edit provider → Edit a model.
 	const defaultOpts: ModelOptions = { reasoning: "xhigh", image: true };
 	let detectedCount = 0;
@@ -347,7 +355,7 @@ export function probePickerItems(
 		const opts = modelOptionsFromProbe(info, { reasoning: "xhigh", image: false });
 		return {
 			value: id, label: id,
-			description: [`Default context ${defaultContextWindow(opts.maxContextWindow, opts.defaultContextWindow) ?? "unknown"}`, describeProbeInfo(info)].filter(Boolean).join(" • "),
+			description: [`Automatic context ${defaultContextWindow(opts.maxContextWindow, opts.defaultContextWindow)} [${contextWindowSource(opts.maxContextWindow, opts.defaultContextWindow)}]`, describeProbeInfo(info)].filter(Boolean).join(" • "),
 		};
 	});
 }
@@ -361,8 +369,7 @@ export async function collectProbedModelInfo(
 	listInfo: Map<string, ModelProbeInfo>,
 	gatewayWide?: Map<string, ModelProbeInfo>,
 	modelsDev?: Map<string, ModelProbeInfo>,
-	// The provider's api flavor — enables model-probe's output-token
-	// fallback limits when nothing else knows them.
+	// Accepted by model-probe for compatibility; runtime fallbacks are uniform.
 	api?: ProviderApi,
 ): Promise<Map<string, ModelProbeInfo>> {
 	ctx.ui.notify("Fetching model metadata (context, max-out, image/video, reasoning) ...", "info");
@@ -477,12 +484,6 @@ export async function fetchModelsDevOptionsForModel(modelId: string): Promise<Mo
 	for (const candidate of normalizeModelIdCandidates(modelId)) {
 		const segments = candidate.split("/");
 		const keys = segments.length > 1 ? segments.slice(1).map((_, i) => segments.slice(i + 1).join("/")) : [candidate];
-		for (let i = 0; i < segments.length - 1; i++) {
-			const vendor = segments[i];
-			for (const key of keys) {
-				if (tables.has(vendor)) collect(vendor, key, 0);
-			}
-		}
 		for (const key of keys) {
 			const holders = [...tables.keys()]
 				.filter(providerId => tables.get(providerId)?.has(key))

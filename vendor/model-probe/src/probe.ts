@@ -152,40 +152,20 @@ export async function probeModels(baseUrl: string, apiKey?: string): Promise<Pro
 	return { ids, infoById, baseUrl: resolvedBaseUrl };
 }
 
-// Output-token fallbacks only. Context windows must come from model metadata;
-// an API flavor does not define a model's default window or maximum capacity.
-export const API_FALLBACK_LIMITS: Record<string, { maxTokens: number }> = {
-	"anthropic-messages": { maxTokens: 32000 },
-	"google-generative-ai": { maxTokens: 65536 },
-	"openai-completions": { maxTokens: 32000 },
-	"openai-responses": { maxTokens: 32000 },
-};
-
-// Community catalogs often publish degenerate limits for models whose real
-// output cap is unknown (maxTokens == contextWindow). Taken at face value that
-// squeezes the input budget to zero, so clamp the output to a conservative cap
-// and keep at least 3/4 of the window for input.
-export const MAX_OUTPUT_TOKEN_CAP = 32000;
-
-export function normalizeModelLimits(contextWindow: number, maxTokens: number): { contextWindow: number; maxTokens: number } {
-	if (contextWindow <= 0 || maxTokens < contextWindow) return { contextWindow, maxTokens };
-	return {
-		contextWindow,
-		maxTokens: Math.min(MAX_OUTPUT_TOKEN_CAP, Math.max(1, Math.floor(contextWindow / 4))),
-	};
-}
-
-// Field defaults applied when neither the gateway nor the catalog says
-// anything: reasoning on (most current models think), image and video input
-// off (opt-in). contextWindow has no default. Developer-role support is a
-// gateway-level probe and defaults to false as well (see developer-role.ts).
-export const MODEL_INFO_DEFAULTS = { image: false, video: false, reasoning: true } as const;
+// Uniform runtime fallbacks, independent of model names and API flavors.
+// These are client settings, not measured model capabilities. Context runtime
+// policy lives in the extension and never becomes reported model capacity.
+export const MODEL_INFO_DEFAULTS = { maxTokens: 32000, image: false, video: false, reasoning: true } as const;
 
 // Fill still-unknown fields from MODEL_INFO_DEFAULTS, tagging them in
 // defaultedFields. Detected and catalog values always win.
 export function applyModelDefaults(info: ModelProbeInfo | undefined): ModelProbeInfo {
 	const out: ModelProbeInfo = { ...(info ?? {}) };
 	const defaulted: NonNullable<ModelProbeInfo["defaultedFields"]> = [...(info?.defaultedFields ?? [])];
+	if (out.maxTokens === undefined) {
+		out.maxTokens = MODEL_INFO_DEFAULTS.maxTokens;
+		defaulted.push("maxTokens");
+	}
 	if (out.image === undefined) {
 		out.image = MODEL_INFO_DEFAULTS.image;
 		defaulted.push("image");
@@ -256,7 +236,7 @@ export function describeProbeInfo(info: ModelProbeInfo | undefined): string | un
 	const tag = (field: "contextWindow" | "defaultContextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "cost") =>
 		fromModelsDev.has(field) ? " [models.dev]" : "";
 	const parts: string[] = [];
-	// Limit fields filled by the api fallback (tagged defaulted) carry no real
+	// Limit fields filled by runtime fallbacks (tagged defaulted) carry no real
 	// information about the model — don't show them.
 	if (info.contextWindow !== undefined && !defaulted.has("contextWindow")) parts.push(`Maximum context ${info.contextWindow}${tag("contextWindow")}`);
 	if (info.defaultContextWindow !== undefined) parts.push(`Model default context ${info.defaultContextWindow}${tag("defaultContextWindow")}`);

@@ -32,8 +32,8 @@ provider——无需手工编辑配置文件。
   最大输出 token、headers/端点覆盖)、批量删除模型、provider 的 API
   flavor、端点、重命名、删除。
 - **合理且诚实的默认值** —— 实测值优先;目录资料在选择器中带标记
-  (`[models.dev]`);默认值不作为实测能力展示。目录里的
-  退化数据(`maxTokens == contextWindow`)会自动钳制。
+  (`[models.dev]`);运行回退保留来源标记,不作为实测能力展示。
+  查询到的目录限制保持原样,不再用启发式算法钳制。
 - **developer role 探测** —— 拒绝 OpenAI `developer` 角色的端点(比如
   Kimi 订阅端点)会自动写入 `compat.supportsDeveloperRole: false`,pi 就会
   继续发 `system` 而不是报 400。
@@ -97,10 +97,15 @@ YAML 子集)。
    和 `supported_endpoint_types`)、Gemini 的 `inputTokenLimit`、Ollama 的
    `/api/tags` + `/api/show`。
 2. **models.dev** —— 精确到单个模型的目录条目,标记 `[models.dev]`。
-3. **输出限制兜底** —— 未获得模型输出限制时,Anthropic/OpenAI 使用
-   32K、Gemini 使用 64K。上下文只取模型元数据;协议不提供默认上下文,
-   未获得资料时保持未知。
-4. **默认值** —— `image: false`、`video: false`、`reasoning: true`。
+3. **统一运行回退** —— 所有 API 的输出限制缺失时使用 32,000 tokens;
+   图片、视频默认关闭,推理默认开启。这些属于扩展的运行设置,来源保存到
+   `defaultedFields`,不作为查询得到的模型事实。
+
+自动上下文优先使用模型单独报告的默认窗口,并受已知最大容量约束。
+只有最大容量时取其一半、向下取整且至少为 1:最大容量 1,050,000 对应
+运行窗口 525,000。两者都缺失时统一使用 65,536 的运行回退。模型行会
+区分 `model default`、`half capacity` 和 `runtime fallback`;回退不会写成
+模型报告的最大容量或默认窗口。手动窗口继续保留。
 
 刷新模型信息时只有第 1–2 层的值会改写已有配置;默认值只是新模型的
 起点。视频输入会被探测并作为选择器标签展示,但 pi 的模型配置没有 video

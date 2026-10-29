@@ -3,7 +3,7 @@ import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, renameProviderApiKey, saveModelsConfig } from "../config.ts";
 import { buildModelEntry, findModel, modelIdOf, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
-import { diffStoredModel, applyMetaChanges, automaticMetadataFields, type MetaChange } from "../model-metadata.ts";
+import { diffStoredModel, applyMetaChanges, applyModelFieldEdit, automaticMetadataFields, type MetaChange } from "../model-metadata.ts";
 import type { CommandContext, ModelProbeInfo, ModelsConfig, ProbeResult, ProviderApi, SelectItem } from "../types.ts";
 import { pickMany, pickTriState, selectOne } from "../ui/select.ts";
 import type { TriItem } from "../ui/select.ts";
@@ -352,16 +352,7 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 		if (modelMetadataItems(opts).some((item) => item.value === field)) {
 			if (!(await editModelMetadataField(ctx, opts, field))) continue;
 			const entry = buildModelEntry(modelId, opts);
-			const keys = field === "reasoning" ? ["reasoning", "thinkingLevelMap"]
-				: field === "context" ? ["contextWindow", "defaultContextWindow", "maxContextWindow"]
-				: [field === "image" ? "input" : "maxTokens"];
-			await mutateModel(ctx, providerId, modelId, (m) => {
-				keys.push("manualFields");
-				for (const key of keys) {
-					if (entry[key] === undefined) delete m[key];
-					else m[key] = entry[key];
-				}
-			});
+			await mutateModel(ctx, providerId, modelId, (m) => applyModelFieldEdit(m, entry, field));
 		} else if (field === "automatic") {
 			await refreshModelMetadata(ctx, providerId, modelId, true);
 		} else if (field === "override") {
@@ -675,14 +666,13 @@ async function refreshModelMetadata(ctx: CommandContext, providerId: string, mod
 		ctx.ui.notify("No model metadata was found; settings remain unchanged.", "warning");
 		return;
 	}
-	const changes = diffStoredModel(automatic ? { ...stored, manualFields: [] } : stored, resolved);
+	const changes = diffStoredModel(stored, resolved, automatic);
 	if (changes.length === 0 && !automatic) {
 		ctx.ui.notify(`${modelId}: already up to date.`, "info");
 		return;
 	}
 
 	const applied = await mutateModel(ctx, providerId, modelId, (m) => {
-		if (automatic) delete m.manualFields;
 		applyMetaChanges(m, changes);
 	});
 	if (applied) ctx.ui.notify(`Updated "${modelId}" with ${changes.length} change${changes.length === 1 ? "" : "s"}.`, "info");

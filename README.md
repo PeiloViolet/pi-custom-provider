@@ -35,8 +35,8 @@ LLM providers — no hand-editing of config files required.
   model delete, provider API flavor, endpoint, rename, delete.
 - **Sensible, honest defaults** — detected values win; catalog values are
   tagged `[models.dev]` in the picker; default-filled capability values are
-  not shown as detected data. Degenerate catalog limits (`maxTokens == contextWindow`)
-  are clamped automatically.
+  not shown as detected data. Runtime fallbacks retain their source markers;
+  queried catalog limits are preserved without heuristic clamping.
 - **Developer-role probe** — endpoints that reject the OpenAI `developer` role
   (e.g. Kimi's subscription endpoint) get `compat.supportsDeveloperRole: false`
   automatically, so pi keeps sending `system` instead of failing with a 400.
@@ -99,10 +99,16 @@ Every field is resolved in tiers, highest priority first:
    and `supported_endpoint_types`), Gemini `inputTokenLimit`, Ollama
    `/api/tags` + `/api/show`.
 2. **models.dev** — exact per-model catalog entries, tagged `[models.dev]`.
-3. **Output-token fallback** — when no source reports an output limit, use
-   32K for Anthropic/OpenAI or 64K for Gemini. Context never comes from the
-   protocol: use model metadata, and leave missing context unknown.
-4. **Defaults** — `image: false`, `video: false`, `reasoning: true`.
+3. **Runtime fallbacks** — missing output limits use 32,000 tokens for every
+   API; image/video default off and reasoning defaults on. These are extension
+   settings, persisted in `defaultedFields`, not queried model facts.
+
+Automatic context uses a separately reported model default first, bounded by
+known capacity. With only maximum capacity it uses half, rounded down (minimum
+one token): a 1,050,000 maximum gives a 525,000 active window. With neither value,
+it uses the uniform 65,536 runtime window. Rows distinguish `model default`,
+`half capacity`, and `runtime fallback`; a fallback never becomes reported
+maximum capacity or a reported model default. Manual windows remain protected.
 
 Only tiers 1–2 ever rewrite an existing entry during model refresh;
 defaults are starting points for new models. Video input is tracked and shown

@@ -34,21 +34,19 @@ Runs on Node >= 22.18 (TypeScript type stripping, no build step).
   snapshot bundled with the installed SDK, so the tier also works fully
   offline. Matched per gateway base URL against the catalog's provider list,
   cached for the session, and never blocks a probe. Disable with
-  `profile: { modelsDev: false }`. Degenerate catalog limits
-  (`maxTokens == contextWindow`) are clamped by `normalizeModelLimits` to
-  `min(32K, ctx/4)` before they reach callers.
-- **Output-token fallback** — when the gateway and catalog report no output
-  limit, the caller's api flavor (`api` option / CLI `--api`) selects an output
-  limit (`API_FALLBACK_LIMITS`: Anthropic/OpenAI 32K, Gemini 64K), tagged in
-  `defaultedFields`. Context is never filled from the API flavor. Model metadata
-  can report a default window separately from maximum capacity: for
-  `context_window` + `max_context_window`, preserve both as
-  `defaultContextWindow` + `contextWindow`. Missing context stays unknown.
+  `profile: { modelsDev: false }`. Catalog limits are preserved as queried;
+  no model-name rules or output/context heuristics rewrite them.
+- **Runtime fallbacks** — when no source reports an output limit, use 32,000
+  for every API, tagged in `defaultedFields`. Model metadata can report a
+  default window separately from maximum capacity: preserve `context_window`
+  + `max_context_window` as `defaultContextWindow` + `contextWindow`.
+  Missing model context is not fabricated here. The extension chooses the
+  reported default, otherwise half capacity, otherwise a uniform 65,536
+  runtime window, and labels that source separately.
 - **Defaults** — fields nothing else answered are filled from
-  `MODEL_INFO_DEFAULTS` (`image: false`, `video: false`, `reasoning: true`)
+  `MODEL_INFO_DEFAULTS` (`maxTokens: 32000`, `image: false`, `video: false`, `reasoning: true`)
   and tagged in
-  `defaultedFields`. Priority: detected > models.dev > api
-  fallback > default.
+  `defaultedFields`. Priority: detected > models.dev > runtime fallback.
   `describeProbeInfo` only renders values that differ from the defaults
   (defaulted `contextWindow` / `maxTokens` are hidden too — they carry no
   real information about the model).
@@ -82,9 +80,8 @@ Usage: model-probe <baseUrl> [options]
 Options:
   --key <apiKey>     Bearer token for the gateway
   --ollama           Use Ollama native endpoints (/api/tags, /api/show)
-  --api <flavor>     pi api flavor (openai-completions, openai-responses,
-                     anthropic-messages, google-generative-ai) — enables
-                     protocol-level fallback limits
+  --api <flavor>     Accepted for compatibility; runtime fallbacks are
+                     uniform and do not depend on the api flavor
   --developer-role   Also probe whether the gateway accepts the OpenAI
                      "developer" role (one tiny chat completion)
   --json             Print the raw result as JSON
@@ -102,8 +99,7 @@ const result = await detectModels("https://api.example.com/v1", {
 	// profile: { modelInfo: true, publicCatalog: false, ... } — tune which
 	// extra endpoints are tried; defaults to trying everything.
 	// ollama: true — use Ollama native endpoints instead of /models/{id}.
-	// api: "openai-completions" — the pi api flavor; enables protocol-level
-	//   fallback limits when nothing else knows a model's limits.
+	// api: "openai-completions" — accepted for compatibility; fallbacks are uniform.
 	// developerRole: true — also probe developer-role support (one tiny
 	//   chat completion); result.supportsDeveloperRole is true/false, or
 	//   undefined when the probe was inconclusive.
@@ -125,11 +121,9 @@ const { ids, infoById, baseUrl } = await probeModels("http://localhost:4000");
 - `probeDeveloperRole(baseUrl, apiKey?, modelId)` → `true | false | undefined`
 - `fetchGatewayWideInfo(baseUrl, { apiKey?, profile?, ollama? })`
 - `fetchPerModelInfo(baseUrl, ids, { apiKey?, ollama? })`
-- `finalizeModelInfo(ids, maps, { modelsDev?, api? }?)` — merge metadata maps + models.dev + api fallback + defaults
+- `finalizeModelInfo(ids, maps, { modelsDev?, api? }?)` — merge metadata maps + models.dev + uniform runtime fallbacks
 - `resolveModelInfo(id, info?, modelsDev?, api?)` — the full fallback chain for one model
 - `normalizeModelIdCandidates(id)` — the id normalization chain (decorated relay ids → base id)
-- `normalizeModelLimits(ctx, out)` / `MAX_OUTPUT_TOKEN_CAP` — clamp degenerate catalog limits
-- `API_FALLBACK_LIMITS` — protocol-level fallback limits per api flavor
 - `applyModelDefaults(info?)` / `MODEL_INFO_DEFAULTS` — the default tier
 - `fetchModelsDevProviders()` / `fetchModelsDevModels(providerId)` /
   `fetchModelsDevInfoForBaseUrl(baseUrl)` — the models.dev catalog tier
@@ -152,7 +146,7 @@ type ModelProbeInfo = {
 	effortOptions?: string[];
 	endpointTypes?: string[]; // New API / One API supported_endpoint_types
 	modelsDevFields?: Array<"contextWindow" | "defaultContextWindow" | "maxTokens" | "image" | "video" | "reasoning">; // from models.dev
-	defaultedFields?: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning">; // api fallback / MODEL_INFO_DEFAULTS
+	defaultedFields?: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "effortOptions">; // runtime fallbacks
 };
 ```
 
