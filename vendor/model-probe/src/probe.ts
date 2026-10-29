@@ -152,15 +152,13 @@ export async function probeModels(baseUrl: string, apiKey?: string): Promise<Pro
 	return { ids, infoById, baseUrl: resolvedBaseUrl };
 }
 
-// Protocol-level fallback limits, applied when neither the gateway nor the
-// catalog reports a model's limits. Reasoning models
-// burn far more output than classic 4K-era defaults, so these follow what the
-// providers themselves document. Keyed by the pi model `api` flavor.
-export const API_FALLBACK_LIMITS: Record<string, { contextWindow: number; maxTokens: number }> = {
-	"anthropic-messages": { contextWindow: 200000, maxTokens: 32000 },
-	"google-generative-ai": { contextWindow: 1048576, maxTokens: 65536 },
-	"openai-completions": { contextWindow: 258000, maxTokens: 32000 },
-	"openai-responses": { contextWindow: 258000, maxTokens: 32000 },
+// Output-token fallbacks only. Context windows must come from model metadata;
+// an API flavor does not define a model's default window or maximum capacity.
+export const API_FALLBACK_LIMITS: Record<string, { maxTokens: number }> = {
+	"anthropic-messages": { maxTokens: 32000 },
+	"google-generative-ai": { maxTokens: 65536 },
+	"openai-completions": { maxTokens: 32000 },
+	"openai-responses": { maxTokens: 32000 },
 };
 
 // Community catalogs often publish degenerate limits for models whose real
@@ -211,6 +209,7 @@ export function probeInfoSummary(info: ModelProbeInfo | undefined): string[] {
 	const defaulted = new Set(info.defaultedFields ?? []);
 	const parts: string[] = [];
 	if (info.contextWindow !== undefined && !defaulted.has("contextWindow")) parts.push("context");
+	if (info.defaultContextWindow !== undefined) parts.push("default context");
 	if (info.maxTokens !== undefined && !defaulted.has("maxTokens")) parts.push("maxTokens");
 	if (info.reasoning !== undefined && !defaulted.has("reasoning")) parts.push("reasoning");
 	if (info.image !== undefined && !defaulted.has("image")) parts.push("image");
@@ -254,12 +253,13 @@ export function describeProbeInfo(info: ModelProbeInfo | undefined): string | un
 	if (!info) return undefined;
 	const fromModelsDev = new Set(info.modelsDevFields ?? []);
 	const defaulted = new Set(info.defaultedFields ?? []);
-	const tag = (field: "contextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "cost") =>
+	const tag = (field: "contextWindow" | "defaultContextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "cost") =>
 		fromModelsDev.has(field) ? " [models.dev]" : "";
 	const parts: string[] = [];
 	// Limit fields filled by the api fallback (tagged defaulted) carry no real
 	// information about the model — don't show them.
 	if (info.contextWindow !== undefined && !defaulted.has("contextWindow")) parts.push(`Maximum context ${info.contextWindow}${tag("contextWindow")}`);
+	if (info.defaultContextWindow !== undefined) parts.push(`Model default context ${info.defaultContextWindow}${tag("defaultContextWindow")}`);
 	if (info.maxTokens !== undefined && !defaulted.has("maxTokens")) parts.push(`max-out ${info.maxTokens}${tag("maxTokens")}`);
 	// Only values that differ from the defaults (image/video: false,
 	// reasoning: true) are worth showing — a model with default values gets
@@ -274,6 +274,20 @@ export function describeProbeInfo(info: ModelProbeInfo | undefined): string | un
 	return parts.length > 0 ? parts.join(" • ") : undefined;
 }
 
+// Some model catalogs report a default window separately from maximum capacity
+// (e.g. context_window + max_context_window). Keep those reported values apart.
+function parseContextFields(source: any, info: ModelProbeInfo, ...capacityKeys: string[]): void {
+	const meta = source?.meta;
+	const maximum = firstFiniteNumber(source, "max_context_window", "maxContextWindow")
+		?? firstFiniteNumber(meta, "max_context_window", "maxContextWindow");
+	const window = firstFiniteNumber(source, ...capacityKeys) ?? firstFiniteNumber(meta, ...capacityKeys);
+	const reportedDefault = firstFiniteNumber(source, "default_context_window", "defaultContextWindow")
+		?? firstFiniteNumber(meta, "default_context_window", "defaultContextWindow")
+		?? (maximum !== undefined ? window : undefined);
+	if (info.contextWindow === undefined && (maximum ?? window) !== undefined) info.contextWindow = maximum ?? window;
+	if (info.defaultContextWindow === undefined && reportedDefault !== undefined) info.defaultContextWindow = reportedDefault;
+}
+
 // One API / New API gateways (and their forks) attach extra model metadata
 // under "meta": { context_window, capabilities: { vision, reasoning, ... },
 // supports_vision, supports_reasoning }. Fills only fields that are still
@@ -281,10 +295,6 @@ export function describeProbeInfo(info: ModelProbeInfo | undefined): string | un
 function parseGatewayMetaFields(source: any, info: ModelProbeInfo): void {
 	const meta = source?.meta;
 	if (!meta || typeof meta !== "object") return;
-	if (info.contextWindow === undefined) {
-		const contextWindow = firstFiniteNumber(meta, "context_window", "max_input_tokens");
-		if (contextWindow !== undefined) info.contextWindow = contextWindow;
-	}
 	if (info.maxTokens === undefined) {
 		const maxTokens = firstFiniteNumber(meta, "max_output_tokens", "max_tokens");
 		if (maxTokens !== undefined) info.maxTokens = maxTokens;
@@ -305,8 +315,7 @@ function parseModelListItem(item: any): ModelProbeInfo | undefined {
 	if (!item || typeof item !== "object") return undefined;
 	const info: ModelProbeInfo = {};
 
-	const contextWindow = firstFiniteNumber(item, "context_length", "context_window", "max_input_tokens", "inputTokenLimit");
-	if (contextWindow !== undefined) info.contextWindow = contextWindow;
+	parseContextFields(item, info, "context_length", "context_window", "max_input_tokens", "inputTokenLimit");
 	// OpenRouter-style: top_provider.max_completion_tokens; others publish
 	// max_output_tokens / outputTokenLimit directly.
 	const maxTokens = firstFiniteNumber(item, "max_output_tokens", "max_completion_tokens", "outputTokenLimit");
@@ -353,8 +362,7 @@ function parseOpenAIModelDetail(json: any): ModelProbeInfo | undefined {
 	const info: ModelProbeInfo = {};
 
 	// inputTokenLimit: Google's native Gemini per-model detail.
-	const contextWindow = firstFiniteNumber(json, "context_window", "inputTokenLimit");
-	if (contextWindow !== undefined) info.contextWindow = contextWindow;
+	parseContextFields(json, info, "context_window", "inputTokenLimit");
 	const maxTokens = firstFiniteNumber(json, "max_output_tokens", "outputTokenLimit");
 	if (maxTokens !== undefined) info.maxTokens = maxTokens;
 
@@ -405,8 +413,7 @@ function parseModelGroupInfo(json: any, out: Map<string, ModelProbeInfo>): boole
 		const name = typeof entry.model_group === "string" ? entry.model_group.trim() : "";
 		if (!name) continue;
 		const parsed: ModelProbeInfo = {};
-		const contextWindow = firstFiniteNumber(entry, "max_input_tokens", "context_window");
-		if (contextWindow !== undefined) parsed.contextWindow = contextWindow;
+		parseContextFields(entry, parsed, "max_input_tokens", "context_window");
 		const maxTokens = firstFiniteNumber(entry, "max_output_tokens", "max_tokens");
 		if (maxTokens !== undefined) parsed.maxTokens = maxTokens;
 		if (typeof entry.supports_vision === "boolean") parsed.image = entry.supports_vision;
@@ -474,8 +481,7 @@ function parsePublicModelList(json: any, out: Map<string, ModelProbeInfo>): bool
 		if (!name) continue;
 		if (entry.status === "draft" || entry.status === "archived" || entry.is_visible === false) continue;
 		const parsed: ModelProbeInfo = {};
-		const contextWindow = firstFiniteNumber(entry, "context_window", "contextWindow", "max_input_tokens");
-		if (contextWindow !== undefined) parsed.contextWindow = contextWindow;
+		parseContextFields(entry, parsed, "context_window", "contextWindow", "max_input_tokens");
 		const maxTokens = firstFiniteNumber(entry, "max_output_tokens", "maxTokens", "max_tokens");
 		if (maxTokens !== undefined) parsed.maxTokens = maxTokens;
 		// Best effort: some catalogs also publish capability flags.
@@ -541,8 +547,7 @@ function parseLiteLLMModelInfo(json: any, out: Map<string, ModelProbeInfo>): boo
 		const info = entry.model_info;
 		if (!name || !info || typeof info !== "object") continue;
 		const parsed: ModelProbeInfo = {};
-		const contextWindow = firstFiniteNumber(info, "context_window", "max_input_tokens");
-		if (contextWindow !== undefined) parsed.contextWindow = contextWindow;
+		parseContextFields(info, parsed, "context_window", "max_input_tokens");
 		const maxTokens = firstFiniteNumber(info, "max_output_tokens", "max_tokens");
 		if (maxTokens !== undefined) parsed.maxTokens = maxTokens;
 		if (typeof info.supports_vision === "boolean") parsed.image = info.supports_vision;

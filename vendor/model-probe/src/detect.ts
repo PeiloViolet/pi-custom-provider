@@ -20,7 +20,7 @@ export interface DetectOptions {
 	/** Use Ollama native endpoints (/api/tags, /api/show) instead of OpenAI per-model details. */
 	ollama?: boolean;
 	/** pi model api flavor (openai-completions, anthropic-messages, ...): enables
-	 * protocol-level fallback limits when no other source knows them. */
+	 * output-token fallbacks when no other source knows them. Context is never defaulted. */
 	api?: string;
 	/** Also probe whether the gateway accepts the OpenAI "developer" role (one tiny chat completion). */
 	developerRole?: boolean;
@@ -69,6 +69,7 @@ export async function fetchGatewayWideInfo(
 			}
 			const filled = { ...existing };
 			if (filled.contextWindow === undefined && info.contextWindow !== undefined) filled.contextWindow = info.contextWindow;
+			if (filled.defaultContextWindow === undefined && info.defaultContextWindow !== undefined) filled.defaultContextWindow = info.defaultContextWindow;
 			if (filled.maxTokens === undefined && info.maxTokens !== undefined) filled.maxTokens = info.maxTokens;
 			if (filled.image === undefined && info.image !== undefined) filled.image = info.image;
 			if (filled.video === undefined && info.video !== undefined) filled.video = info.video;
@@ -95,7 +96,7 @@ function applyModelsDevFallback(info: ModelProbeInfo | undefined, modelsDev: Mod
 	if (!modelsDev) return info;
 	const out: ModelProbeInfo = { ...(info ?? {}) };
 	const tagged: NonNullable<ModelProbeInfo["modelsDevFields"]> = [...(info?.modelsDevFields ?? [])];
-	for (const field of ["contextWindow", "maxTokens", "image", "video", "reasoning", "cost"] as const) {
+	for (const field of ["contextWindow", "defaultContextWindow", "maxTokens", "image", "video", "reasoning", "cost"] as const) {
 		if (out[field] === undefined && modelsDev[field] !== undefined) {
 			out[field] = modelsDev[field] as any;
 			tagged.push(field);
@@ -107,7 +108,7 @@ function applyModelsDevFallback(info: ModelProbeInfo | undefined, modelsDev: Mod
 	return out;
 }
 
-// Protocol-level limits, below detected and catalog values — the last
+// Output-token defaults, below detected and catalog values — the last
 // word before a field stays unknown. Tagged as defaulted so callers can tell
 // it apart from real data (and don't display it as a confident label).
 function applyApiFallback(info: ModelProbeInfo, api: string | undefined): ModelProbeInfo {
@@ -115,10 +116,6 @@ function applyApiFallback(info: ModelProbeInfo, api: string | undefined): ModelP
 	if (!fallback) return info;
 	const out: ModelProbeInfo = { ...info };
 	const defaulted: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning"> = [...(info.defaultedFields ?? [])];
-	if (out.contextWindow === undefined) {
-		out.contextWindow = fallback.contextWindow;
-		defaulted.push("contextWindow");
-	}
 	if (out.maxTokens === undefined) {
 		out.maxTokens = fallback.maxTokens;
 		defaulted.push("maxTokens");
@@ -128,8 +125,8 @@ function applyApiFallback(info: ModelProbeInfo, api: string | undefined): ModelP
 }
 
 // Resolve the final metadata for one model: detected values win, then the
-// models.dev catalog (exact per-model entries), then protocol-level fallback
-// limits and MODEL_INFO_DEFAULTS. Filled fields are tagged with modelsDevFields
+// models.dev catalog (exact per-model entries), then output-token fallbacks
+// and MODEL_INFO_DEFAULTS. Filled fields are tagged with modelsDevFields
 // or defaultedFields.
 export function resolveModelInfo(
 	modelId: string,

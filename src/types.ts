@@ -14,7 +14,7 @@ export const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "x
 export type ModelOptions = {
 	reasoning: ReasoningCeiling;
 	image: boolean;
-	// Active window, the application default, and advertised capacity are distinct.
+	// Active window, the reported model default, and advertised capacity are distinct.
 	contextWindow?: number;
 	defaultContextWindow?: number;
 	maxContextWindow?: number;

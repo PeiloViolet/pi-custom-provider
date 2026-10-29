@@ -37,10 +37,13 @@ Runs on Node >= 22.18 (TypeScript type stripping, no build step).
   `profile: { modelsDev: false }`. Degenerate catalog limits
   (`maxTokens == contextWindow`) are clamped by `normalizeModelLimits` to
   `min(32K, ctx/4)` before they reach callers.
-- **API fallback** — when the gateway and the catalog stay
-  silent on a model's limits, the caller's api flavor (`api` option / CLI
-  `--api`) supplies protocol-level limits (`API_FALLBACK_LIMITS`: anthropic
-  200K/32K, google 1M/64K, openai 258K/32K). Tagged in `defaultedFields`.
+- **Output-token fallback** — when the gateway and catalog report no output
+  limit, the caller's api flavor (`api` option / CLI `--api`) selects an output
+  limit (`API_FALLBACK_LIMITS`: Anthropic/OpenAI 32K, Gemini 64K), tagged in
+  `defaultedFields`. Context is never filled from the API flavor. Model metadata
+  can report a default window separately from maximum capacity: for
+  `context_window` + `max_context_window`, preserve both as
+  `defaultContextWindow` + `contextWindow`. Missing context stays unknown.
 - **Defaults** — fields nothing else answered are filled from
   `MODEL_INFO_DEFAULTS` (`image: false`, `video: false`, `reasoning: true`)
   and tagged in
@@ -139,7 +142,8 @@ const { ids, infoById, baseUrl } = await probeModels("http://localhost:4000");
 
 ```ts
 type ModelProbeInfo = {
-	contextWindow?: number;
+	contextWindow?: number; // reported capacity
+	defaultContextWindow?: number; // separately reported model default
 	maxTokens?: number; // max output tokens
 	image?: boolean;    // accepts image input
 	video?: boolean;    // accepts video input
@@ -147,7 +151,7 @@ type ModelProbeInfo = {
 	alwaysThinking?: boolean;
 	effortOptions?: string[];
 	endpointTypes?: string[]; // New API / One API supported_endpoint_types
-	modelsDevFields?: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning">; // from models.dev
+	modelsDevFields?: Array<"contextWindow" | "defaultContextWindow" | "maxTokens" | "image" | "video" | "reasoning">; // from models.dev
 	defaultedFields?: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning">; // api fallback / MODEL_INFO_DEFAULTS
 };
 ```

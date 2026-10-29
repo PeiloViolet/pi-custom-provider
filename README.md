@@ -99,8 +99,9 @@ Every field is resolved in tiers, highest priority first:
    and `supported_endpoint_types`), Gemini `inputTokenLimit`, Ollama
    `/api/tags` + `/api/show`.
 2. **models.dev** — exact per-model catalog entries, tagged `[models.dev]`.
-3. **API fallback** — protocol-level limits (anthropic 200K/32K, google 1M/64K,
-   openai 258K/32K) when nothing else knows them.
+3. **Output-token fallback** — when no source reports an output limit, use
+   32K for Anthropic/OpenAI or 64K for Gemini. Context never comes from the
+   protocol: use model metadata, and leave missing context unknown.
 4. **Defaults** — `image: false`, `video: false`, `reasoning: true`.
 
 Only tiers 1–2 ever rewrite an existing entry during model refresh;

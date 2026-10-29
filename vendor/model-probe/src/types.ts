@@ -3,7 +3,7 @@
 // Every field has one of four sources, highest priority first:
 //   1. detected   — real data from the gateway (no tag)
 //   2. models.dev — exact per-model catalog entries (listed in modelsDevFields)
-//   3. api fallback — protocol-level limits when nothing else spoke (listed in defaultedFields)
+//   3. api fallback — output-token defaults when nothing else spoke (listed in defaultedFields)
 //   4. default    — filled from MODEL_INFO_DEFAULTS (listed in defaultedFields)
 // USD per 1M tokens — pi's ModelCostRates convention (and models.dev's).
 // No default price: a guessed price is worse than none, so
@@ -16,7 +16,8 @@ export type ModelCostInfo = {
 };
 
 export type ModelProbeInfo = {
-	contextWindow?: number;
+	contextWindow?: number; // reported model capacity (not an API default)
+	defaultContextWindow?: number; // reported model default, when separately available
 	maxTokens?: number; // max output tokens
 	image?: boolean; // accepts image input
 	video?: boolean; // accepts video input
@@ -25,7 +26,7 @@ export type ModelProbeInfo = {
 	alwaysThinking?: boolean; // reasoning exists but cannot be turned off
 	effortOptions?: string[]; // provider reasoning-effort names (none/minimal/low/.../max)
 	endpointTypes?: string[]; // New API / One API: supported_endpoint_types (chat, embeddings, ...)
-	modelsDevFields?: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "cost">; // which fields came from models.dev
+	modelsDevFields?: Array<"contextWindow" | "defaultContextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "cost">; // which fields came from models.dev
 	defaultedFields?: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning">; // which fields came from the api fallback / MODEL_INFO_DEFAULTS
 };
 
@@ -45,8 +46,7 @@ export type ProbeResult = {
  * - `modelGroupInfo`: LiteLLM /model_group/info
  * - `publicCatalog`: New API style /api/models/public (on the site host)
  * - `perModelDetails`: per-model GET /models/{id}
- * - `modelsDev`: models.dev catalog matched by base URL (sits below the local
- *   rules in priority)
+ * - `modelsDev`: models.dev catalog matched by base URL (fills missing gateway fields)
  */
 export interface DetectProfile {
 	modelInfo?: boolean;

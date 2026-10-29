@@ -324,10 +324,8 @@ async function editProviderModels(ctx: CommandContext, providerId: string) {
 async function editSingleModel(ctx: CommandContext, providerId: string, modelId: string): Promise<boolean> {
 	while (true) {
 		let model: any;
-		let provider: any;
 		try {
-			provider = loadModelsConfig().providers?.[providerId];
-			model = findModel(provider, modelId);
+			model = findModel(loadModelsConfig().providers?.[providerId], modelId);
 		} catch (error) {
 			ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 			return false;
@@ -337,7 +335,7 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 			return false;
 		}
 
-		const opts = readModelOptions(model, provider?.api);
+		const opts = readModelOptions(model);
 		const hasHeaders = model.headers && Object.keys(model.headers).length > 0;
 		const override = model.baseUrl || model.api ? "set" : "unset";
 
@@ -355,7 +353,7 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 			if (!(await editModelMetadataField(ctx, opts, field))) continue;
 			const entry = buildModelEntry(modelId, opts);
 			const keys = field === "reasoning" ? ["reasoning", "thinkingLevelMap"]
-				: field === "context" ? ["contextWindow", "maxContextWindow"]
+				: field === "context" ? ["contextWindow", "defaultContextWindow", "maxContextWindow"]
 				: [field === "image" ? "input" : "maxTokens"];
 			await mutateModel(ctx, providerId, modelId, (m) => {
 				keys.push("manualFields");
@@ -524,7 +522,7 @@ async function refreshProviderModels(ctx: CommandContext, providerId: string) {
 		const info = infoById.get(id);
 		const stored = storedModels.find((m) => modelIdOf(m) === id);
 		if (!info || !stored) continue;
-		const changes = diffStoredModel(stored, info, api);
+		const changes = diffStoredModel(stored, info);
 		if (changes.length > 0) changeById.set(id, changes);
 	}
 
@@ -677,7 +675,7 @@ async function refreshModelMetadata(ctx: CommandContext, providerId: string, mod
 		ctx.ui.notify("No model metadata was found; settings remain unchanged.", "warning");
 		return;
 	}
-	const changes = diffStoredModel(automatic ? { ...stored, manualFields: [] } : stored, resolved, api);
+	const changes = diffStoredModel(automatic ? { ...stored, manualFields: [] } : stored, resolved);
 	if (changes.length === 0 && !automatic) {
 		ctx.ui.notify(`${modelId}: already up to date.`, "info");
 		return;

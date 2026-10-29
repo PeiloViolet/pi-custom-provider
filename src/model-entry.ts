@@ -53,16 +53,16 @@ function ceilingFromThinkingMap(map: Record<string, string | null>): ReasoningCe
 // reasoning on); the wizard fallback only supplies the reasoning ceiling for
 // thinking models. (model-probe also tracks video input, but pi's model config
 // only supports text/image, so it isn't carried into ModelOptions.)
-export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions, api?: ProviderApi): ModelOptions {
+export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions): ModelOptions {
 	if (!info) return fallback;
 	const maximum = info.defaultedFields?.includes("contextWindow")
 		? fallback.maxContextWindow : info.contextWindow ?? fallback.maxContextWindow;
-	const initial = defaultContextWindow(maximum, api);
+	const initial = defaultContextWindow(maximum, info.defaultContextWindow ?? fallback.defaultContextWindow);
 	const opts: ModelOptions = {
 		reasoning: fallback.reasoning,
 		image: info.image ?? fallback.image,
 		contextWindow: maximum ? initial : fallback.contextWindow ?? initial,
-		defaultContextWindow: initial,
+		defaultContextWindow: info.defaultContextWindow ?? fallback.defaultContextWindow,
 		maxContextWindow: maximum,
 		maxTokens: info.maxTokens ?? fallback.maxTokens,
 		cost: info.cost ?? fallback.cost,
@@ -129,8 +129,11 @@ export function buildModelEntry(
 	if (typeof opts.contextWindow === "number" && opts.contextWindow > 0) {
 		entry.contextWindow = opts.contextWindow;
 	}
-	// Extension metadata; Pi uses contextWindow as the active window. Keep
-	// capacity separately so returning to Edit per model never loses it.
+	// Extension metadata; Pi uses contextWindow as the active window. Preserve
+	// the automatic model window and capacity when a manual window is selected.
+	if (typeof opts.defaultContextWindow === "number" && opts.defaultContextWindow > 0) {
+		entry.defaultContextWindow = opts.defaultContextWindow;
+	}
 	if (typeof opts.maxContextWindow === "number" && opts.maxContextWindow > 0) {
 		entry.maxContextWindow = opts.maxContextWindow;
 	}
@@ -185,7 +188,7 @@ export function buildProviderConfig(
 			// manually added models, which have no probe info at all.
 			const info = resolveModelInfo(id, infoById?.get(id), undefined, api);
 			const override = optionOverrides?.get(id);
-			const modelOpts = override ?? modelOptionsFromProbe(info, opts, api);
+			const modelOpts = override ?? modelOptionsFromProbe(info, opts);
 			return buildModelEntry(id, modelOpts, ceilingOverrides);
 		}),
 	};
@@ -209,7 +212,7 @@ export function buildProviderConfig(
 
 // Read the reasoning ceiling + image flag already stored on a model entry,
 // mirroring pi's getSupportedThinkingLevels so edit defaults match reality.
-export function readModelOptions(model: any, api?: ProviderApi): ModelOptions {
+export function readModelOptions(model: any): ModelOptions {
 	const image = Array.isArray(model?.input) ? model.input.includes("image") : true;
 	const contextWindow = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
 	const maximum = typeof model?.maxContextWindow === "number" ? model.maxContextWindow : undefined;
@@ -217,7 +220,7 @@ export function readModelOptions(model: any, api?: ProviderApi): ModelOptions {
 		...(Array.isArray(model?.manualFields) ? { manualFields: [...model.manualFields] } : {}),
 		image, contextWindow,
 		maxContextWindow: maximum,
-		defaultContextWindow: defaultContextWindow(maximum, model?.api ?? api),
+		defaultContextWindow: typeof model?.defaultContextWindow === "number" ? model.defaultContextWindow : undefined,
 		maxTokens: typeof model?.maxTokens === "number" ? model.maxTokens : undefined,
 		cost: model?.cost,
 	};

@@ -97,8 +97,9 @@ YAML 子集)。
    和 `supported_endpoint_types`)、Gemini 的 `inputTokenLimit`、Ollama 的
    `/api/tags` + `/api/show`。
 2. **models.dev** —— 精确到单个模型的目录条目,标记 `[models.dev]`。
-3. **协议兜底** —— 其他来源都不知道时,按协议给限制值(anthropic
-   200K/32K、google 1M/64K、openai 258K/32K)。
+3. **输出限制兜底** —— 未获得模型输出限制时,Anthropic/OpenAI 使用
+   32K、Gemini 使用 64K。上下文只取模型元数据;协议不提供默认上下文,
+   未获得资料时保持未知。
 4. **默认值** —— `image: false`、`video: false`、`reasoning: true`。
 
 刷新模型信息时只有第 1–2 层的值会改写已有配置;默认值只是新模型的

@@ -1,25 +1,28 @@
 import { defaultContextWindow } from "./context-window.ts";
 import { buildModelEntry, modelOptionsFromProbe } from "./model-entry.ts";
-import type { ModelProbeInfo, ProviderApi } from "./types.ts";
+import type { ModelProbeInfo } from "./types.ts";
 
 export type MetaChange = { key: string; value: unknown; label: string };
 
 export function automaticMetadataFields(info: ModelProbeInfo): Set<keyof ModelProbeInfo> {
 	const defaulted = new Set<string>(info.defaultedFields ?? []);
-	const fields: (keyof ModelProbeInfo)[] = ["contextWindow", "maxTokens", "image", "reasoning", "cost"];
+	const fields: (keyof ModelProbeInfo)[] = ["contextWindow", "defaultContextWindow", "maxTokens", "image", "reasoning", "cost"];
 	return new Set(fields.filter((field) => info[field] !== undefined && !defaulted.has(field)));
 }
 
 // Missing and defaulted values never erase real metadata. Only explicitly edited
 // fields opt out; legacy entries without manualFields are fully automatic.
-export function diffStoredModel(model: any, info: ModelProbeInfo, api?: ProviderApi): MetaChange[] {
+export function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
 	const manual = new Set<string>(model?.manualFields ?? []);
 	const fields = automaticMetadataFields(info);
 	const known = (field: keyof ModelProbeInfo) => fields.has(field);
 	const patch: Record<string, unknown> = {};
-	if (known("contextWindow")) {
-		patch.maxContextWindow = info.contextWindow;
-		if (!manual.has("context")) patch.contextWindow = defaultContextWindow(info.contextWindow, model?.api ?? api);
+	if (known("contextWindow")) patch.maxContextWindow = info.contextWindow;
+	if (known("defaultContextWindow")) patch.defaultContextWindow = info.defaultContextWindow;
+	if (known("contextWindow") || known("defaultContextWindow")) {
+		const maximum = known("contextWindow") ? info.contextWindow : model?.maxContextWindow;
+		const reportedDefault = info.defaultContextWindow ?? model?.defaultContextWindow;
+		if (!manual.has("context")) patch.contextWindow = defaultContextWindow(maximum, reportedDefault);
 	}
 	if (known("maxTokens") && !manual.has("maxtokens")) patch.maxTokens = info.maxTokens;
 	if (known("image") && !manual.has("image")) patch.input = info.image ? ["text", "image"] : ["text"];
@@ -32,7 +35,7 @@ export function diffStoredModel(model: any, info: ModelProbeInfo, api?: Provider
 	}
 	if (info.cost) patch.cost = info.cost;
 	const labels: Record<string, string> = {
-		contextWindow: "default context", maxContextWindow: "maximum context", maxTokens: "max-out",
+		contextWindow: "context", defaultContextWindow: "model default context", maxContextWindow: "maximum context", maxTokens: "max-out",
 		input: "input", reasoning: "reasoning", thinkingLevelMap: "reasoning levels", cost: "cost",
 	};
 	return Object.entries(patch)

@@ -2,6 +2,7 @@ import { BUILTIN_COLLISION_WARNING, BUILTIN_PROVIDER_IDS, loadModelsConfig } fro
 import { resolveModelInfo } from "../../vendor/model-probe/index.ts";
 import { REASONING_LEVELS } from "../types.ts";
 import { buildModelEntry, modelOptionsFromProbe } from "../model-entry.ts";
+import { defaultContextWindow } from "../context-window.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ProviderApi, ProviderStyle, ReasoningCeiling, SelectItem } from "../types.ts";
 import { normalizeEndpoint, slugify, suggestProviderId } from "../url.ts";
 import { selectOne } from "./select.ts";
@@ -85,10 +86,11 @@ export async function promptMaxTokens(ctx: CommandContext, current?: number): Pr
 
 // The same capability fields and prompts serve staged and persisted models.
 export function modelMetadataItems(opts: ModelOptions): SelectItem[] {
+	const automaticWindow = defaultContextWindow(opts.maxContextWindow, opts.defaultContextWindow);
 	return [
 		{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → max)" },
 		{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
-		{ value: "context", label: "Context window", suffix: ` • ${opts.contextWindow ?? "unset"}`, description: `Default context: ${opts.defaultContextWindow ?? "unknown"} • Maximum context: ${opts.maxContextWindow ?? "unknown"}. Select a window to use.` },
+		{ value: "context", label: "Context window", suffix: ` • ${opts.contextWindow ?? "unset"}`, description: `Default context: ${automaticWindow ?? "unknown"} • Maximum context: ${opts.maxContextWindow ?? "unknown"}. Select a window to use.` },
 		{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${opts.maxTokens ?? "unset"}`, description: "Max tokens this model may generate" },
 	].map((item) => ({ ...item, suffix: `${item.suffix} • ${opts.manualFields?.includes(item.value) ? "manual" : "automatic"}` }));
 }
@@ -113,19 +115,20 @@ export async function editModelMetadataField(ctx: CommandContext, opts: ModelOpt
 		if (value === null) return false;
 		opts.image = value;
 	} else if (field === "context") {
+		const automaticWindow = defaultContextWindow(opts.maxContextWindow, opts.defaultContextWindow);
 		const choice = await selectOne(ctx, "Context window", [
-			{ value: "automatic", label: "Automatic", suffix: ` • ${opts.defaultContextWindow ?? "unknown"}`, description: "Use the default context; update automatically when metadata is refreshed" },
+			{ value: "automatic", label: "Automatic", suffix: ` • ${automaticWindow ?? "unknown"}`, description: "Use the default context; update automatically when metadata is refreshed" },
 			{ value: "manual", label: "Manual", description: `Enter a window size. Maximum context: ${opts.maxContextWindow ?? "unknown"}` },
 		], { initialIndex: opts.manualFields?.includes("context") ? 1 : 0 });
 		if (!choice) return false;
-		const value = choice === "automatic" ? opts.defaultContextWindow : await promptContextWindow(ctx, opts.contextWindow);
-		if (value === null || value === undefined) return false;
-		if (opts.maxContextWindow && value > opts.maxContextWindow) {
+		const value = choice === "automatic" ? automaticWindow : await promptContextWindow(ctx, opts.contextWindow);
+		if (value === null) return false;
+		if (opts.maxContextWindow && value !== undefined && value > opts.maxContextWindow) {
 			ctx.ui.notify(`Context window cannot exceed the maximum context (${opts.maxContextWindow}).`, "warning");
 			return false;
 		}
-		opts.contextWindow = value || opts.defaultContextWindow;
-		manual = choice === "manual" && value > 0;
+		opts.contextWindow = value || automaticWindow;
+		manual = choice === "manual" && value !== undefined && value > 0;
 	} else if (field === "maxtokens") {
 		const value = await promptMaxTokens(ctx, opts.maxTokens);
 		if (value === null) return false;
@@ -192,7 +195,7 @@ export async function promptManualModels(
 						? "openai-responses"
 						: "openai-completions";
 		const resolved = resolveModelInfo(id, undefined, undefined, api);
-		const opts = modelOptionsFromProbe(resolved, { reasoning: "xhigh", image: false }, api);
+		const opts = modelOptionsFromProbe(resolved, { reasoning: "xhigh", image: false });
 		const edited = await promptModelMetadata(ctx, `Edit ${id}`, opts);
 		if (!edited) continue;
 		ids.push(id);
