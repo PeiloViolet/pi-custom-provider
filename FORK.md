@@ -16,7 +16,7 @@ OpenAI discovery and per-model metadata requests no longer unconditionally carry
 
 Auto-detect fills missing endpoint-matched catalog entries by searching models.dev across providers for each selected model ID, reusing the Refresh model info lookup. Matches retain the catalog lookup order; no model-family table or vendor prefix promotes a provider. models.dev is a third-party catalog, including when its entry describes a model maker.
 
-Adding from a custom endpoint or the catalog collects model information automatically, then opens one **Edit models** list for all selected models. It uses the same model rows as Edit per model; selecting a model directly opens the shared capability editor. There are no per-model catalog source confirmations. **Done** in the model editor keeps that draft and returns to the list; Esc discards that model's draft. **Done** in the list continues saving the provider, while Esc cancels adding. Effective endpoint values and automatically selected catalog metadata are included in the editor. Confirmed edits win at save time; resetting output tokens selects the uniform runtime fallback. Nothing is persisted during review. Refresh models automatically updates found metadata for kept models; its model list only controls adding/removing models. Ollama stays on native metadata.
+**Select models** displays model IDs only, on both custom-endpoint and catalog paths. Custom endpoints fetch the model list first and defer gateway-wide, per-model, and catalog metadata queries until after selection. Catalog paths already have directory records but still display IDs only at selection. The flow then opens one **Edit models** list for all selected models with resolved metadata and the half-capacity runtime window. It uses the same model rows as Edit per model; selecting a model directly opens the shared capability editor. There are no per-model catalog source confirmations. **Done** in the model editor keeps that draft and returns to the list; Esc discards that model's draft. **Done** in the list continues saving the provider, while Esc cancels adding. Effective endpoint values and automatically selected catalog metadata are included in the editor. Confirmed edits win at save time; resetting output tokens selects the uniform runtime fallback. Nothing is persisted during review. Refresh models automatically updates found metadata for kept models; its model list only controls adding/removing models. Ollama stays on native metadata.
 
 The capability field menu and handlers are shared by the collected-model list, manual entry, and Edit per model. Existing model editing still saves one field at a time and preserves unrelated headers, overrides and pricing. Manual-entry Esc discards the current draft. Catalog effort mappings and prices survive edits to unrelated fields.
 
@@ -35,6 +35,8 @@ npm install --ignore-scripts --legacy-peer-deps
 npm test
 pi install .
 ```
+
+After editing the installed extension locally, close any open provider menu and run `/reload` in Pi before reopening `/custom-provider`. Pi loads extension modules into the running process; committing files does not replace an already loaded command handler.
 
 Tests require Node 22.18+ (Node 24+ recommended). For Git distribution commit package.json, package-lock.json, sources, vendor, tests and license files, then push and tag. Pi installs runtime dependencies for Git packages. npm publication is optional; the pi manifest and pi-package keyword already describe the package resources.
 

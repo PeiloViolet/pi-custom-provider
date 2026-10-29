@@ -1,5 +1,4 @@
 import {
-	describeProbeInfo,
 	fetchGatewayWideInfo as probeGatewayWideInfo,
 	fetchModelsDevInfoForBaseUrl,
 	fetchModelsDevModels,
@@ -25,7 +24,6 @@ import type {
 	ModelOptions,
 	ModelProbeInfo,
 	ModelsConfig,
-	ProbeItem,
 	ProviderApi,
 	ProviderStyle,
 	SelectItem,
@@ -339,25 +337,6 @@ export async function fetchGatewayWideInfo(
 	// Ollama and Gemini have no LiteLLM-style gateway-wide metadata endpoints.
 	if (style === "ollama" || style === "gemini") return new Map();
 	return probeGatewayWideInfo(baseUrl, { apiKey: resolveApiKeyForProbe(apiKey.mode, apiKey.value), profile });
-}
-
-// Build picker items for probed model ids, resolved through the models.dev
-// catalog and defaults. Catalog-supplied values are tagged [models.dev];
-// fallback limits are not displayed as model capacities.
-export function probePickerItems(
-	ids: string[],
-	infoById: Map<string, ModelProbeInfo>,
-	modelsDev?: Map<string, ModelProbeInfo>,
-	api?: ProviderApi,
-): ProbeItem[] {
-	return ids.map((id) => {
-		const info = resolveModelInfo(id, infoById.get(id), modelsDev, api);
-		const opts = modelOptionsFromProbe(info, { reasoning: "xhigh", image: false });
-		return {
-			value: id, label: id,
-			description: [`Automatic context ${automaticContextWindow(opts.maxContextWindow)} [${contextWindowSource(opts.maxContextWindow)}]`, describeProbeInfo(info)].filter(Boolean).join(" • "),
-		};
-	});
 }
 
 export async function collectProbedModelInfo(

@@ -1,5 +1,4 @@
 import {
-	fetchModelsDevInfoForBaseUrl,
 	fetchModelsDevModels,
 	fetchModelsDevProviders,
 	finalizeModelInfo,
@@ -11,12 +10,11 @@ import {
 import { resolveApiKeyForProbe } from "../api-key.ts";
 import { loadModelsConfig, MODELS_JSON_PATH } from "../config.ts";
 import { buildProviderConfig } from "../model-entry.ts";
-import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
 import { pickMany, selectOne } from "../ui/select.ts";
 import { promptApiKey, promptEndpoint, promptManualModels, promptProviderId, promptProviderStyle } from "../ui/prompts.ts";
 import { buildProbeUrl, dedupe, hasExplicitScheme, normalizeEndpoint } from "../url.ts";
-import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistApiKey, persistProvider, probePickerItems, reviewModelEntries } from "./shared.ts";
+import { collectProbedModelInfo, findProvidersByEndpoint, persistApiKey, persistProvider, reviewModelEntries } from "./shared.ts";
 
 // Manual model entry (id → per-model metadata menu) lives in ui/prompts.ts as
 // promptManualModels; every "add by hand" path below funnels through it.
@@ -102,7 +100,7 @@ async function addFromCatalog(ctx: CommandContext) {
 	let infoById: Map<string, ModelProbeInfo> | undefined;
 	let overrides: Map<string, ModelOptions> | undefined;
 	if (catalog.size > 0) {
-		const picked = await pickMany(ctx, "Select models", probePickerItems([...catalog.keys()], new Map(), catalog, api));
+		const picked = await pickMany(ctx, "Select models", [...catalog.keys()].map(id => ({ value: id, label: id })));
 		if (!picked || picked.length === 0) return;
 		ids = picked;
 		infoById = finalizeModelInfo(picked, [], { modelsDev: catalog, api });
@@ -176,27 +174,12 @@ async function collectModelIds(
 				return manual ? { ...manual, baseUrl } : null;
 			}
 
-			// Gateway-wide metadata (one call per source) — fetch BEFORE the picker so
-			// it shows real detected values instead of catalog/rule guesses.
-			let gatewayWide: Map<string, ModelProbeInfo> | undefined;
-			if (AUTO_PROBE_PROFILE.modelInfo || AUTO_PROBE_PROFILE.publicCatalog || AUTO_PROBE_PROFILE.modelGroupInfo) {
-				ctx.ui.notify("Fetching model metadata (context, max-out, image/video, reasoning) ...", "info");
-				gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, AUTO_PROBE_PROFILE);
-				if (gatewayWide.size > 0) {
-					for (const [id, info] of gatewayWide) {
-						probed.infoById.set(id, { ...(probed.infoById.get(id) ?? {}), ...info });
-					}
-				}
-			}
-
-			// Catalog values fill fields the endpoint did not report.
-			const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
-
-			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById, modelsDev, api));
+			// Discovery selects IDs only. Gather metadata after the user picks models.
+			const picked = await pickMany(ctx, "Select models", probed.ids.map(id => ({ value: id, label: id })));
 			if (!picked || picked.length === 0) return null;
 
 			const infoById = await collectProbedModelInfo(
-				ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, gatewayWide, modelsDev, api,
+				ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, undefined, undefined, api,
 			);
 			const options = await reviewModelEntries(ctx, picked, infoById, api);
 			return options ? { ids: picked, infoById, baseUrl, options } : null;
