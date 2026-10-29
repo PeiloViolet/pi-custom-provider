@@ -26,10 +26,10 @@ LLM providers — no hand-editing of config files required.
   itself (LiteLLM `/model/info` + `/model_group/info`, site public catalogs,
   OpenAI `GET /models/{id}`, inline list metadata, Ollama native API) and from
   models.dev. See [How metadata is resolved](#how-metadata-is-resolved).
-- **Re-probe to reconcile** — query `/models` again and review everything in
-  one tri-state list: new models, metadata updates (`context 128000 ->
-  1000000`, `image [+]`, `max-out 8192 -> 32000`), and vanished models flagged
-  `unsupported`. `[x]` apply, `[-]` keep stored metadata, `[ ]` remove/skip.
+- **Refresh models** — discover models and update their information.
+  The list controls adding/keeping or removing/skipping models; unavailable
+  models are flagged `unsupported`. Found metadata updates automatically,
+  while explicitly edited fields retain their manual values.
 - **Edit everything afterwards** — per-model fields (reasoning ceiling, image
   input, context window, max output tokens, headers/endpoint override), bulk
   model delete, provider API flavor, endpoint, rename, delete.
@@ -81,7 +81,7 @@ or **Delete provider**.
 
 ### Edit
 
-Pick a provider, then: **Re-probe for models** (reconcile as above),
+Pick a provider, then: **Refresh models** (as above),
 **Edit per model**, **Delete models**, **Add models manually**, **API flavor**,
 **Endpoint**, **Rename provider**, or **Delete provider**.
 
@@ -109,7 +109,7 @@ Every field is resolved in tiers, highest priority first:
    openai 258K/32K) when nothing else knows them.
 5. **Defaults** — `image: false`, `video: false`, `reasoning: true`.
 
-Only tiers 1–2 ever rewrite an existing entry during re-probe; guesses and
+Only tiers 1–2 ever rewrite an existing entry during model refresh; guesses and
 defaults are starting points for new models. Video input is tracked and shown
 as a picker tag, but pi's model config has no video slot, so it is
 display-only.

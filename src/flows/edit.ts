@@ -87,7 +87,7 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 
 		const modelCount = Array.isArray(provider.models) ? provider.models.length : 0;
 		const action = await selectOne(ctx, `Edit ${providerId}`, [
-			{ value: "probe", label: "Re-probe for models", description: "Query /models again: add new models, flag vanished ones as unsupported, offer metadata updates" },
+			{ value: "probe", label: "Refresh models", description: "Discover models and update their information; flag unavailable models" },
 			{ value: "models", label: "Edit per model", description: `${modelCount} model${modelCount === 1 ? "" : "s"} — reasoning, image input, context, max tokens, headers, delete` },
 			{ value: "deletemodels", label: "Delete models", description: "Remove multiple models at once" },
 			{ value: "add", label: "Add models manually", description: "Type model ids to add" },
@@ -102,7 +102,7 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 		if (action === "models") {
 			await editProviderModels(ctx, providerId);
 		} else if (action === "probe") {
-			await reprobeProvider(ctx, providerId);
+			await refreshProviderModels(ctx, providerId);
 		} else if (action === "deletemodels") {
 			await deleteModelsFromProvider(ctx, providerId);
 		} else if (action === "add") {
@@ -343,7 +343,7 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 			...modelMetadataItems(opts),
 			...(opts.manualFields?.length ? [{ value: "automatic", label: "Use automatic metadata", description: "Clear manual field overrides and refresh model information" }] : []),
 			{ value: "override", label: "Headers / endpoint override", suffix: ` • ${hasHeaders ? "headers" : override}`, description: "Per-model HTTP headers and api/baseUrl override" },
-			{ value: "refresh", label: "Refresh metadata", description: "Pull context/image/reasoning from models.dev or the endpoint's /models" },
+			{ value: "refresh", label: "Refresh model info", description: "Update context, image input and reasoning from the endpoint and models.dev" },
 			{ value: "delete", label: "Delete this model", description: "Remove this model from the provider" },
 			{ value: "back", label: "Back", description: "Return to the model list" },
 		]);
@@ -426,7 +426,7 @@ async function editModelOverride(ctx: CommandContext, providerId: string, modelI
 	});
 }
 
-// One-line summary of a stored entry's current config, for the re-probe list.
+// One-line summary of a stored entry's current config, for the refresh list.
 // Empty string when the entry carries no metadata at all.
 function storedModelSummary(model: any): string {
 	const details: string[] = [];
@@ -439,7 +439,7 @@ function storedModelSummary(model: any): string {
 	return details.join(" • ");
 }
 
-async function reprobeProvider(ctx: CommandContext, providerId: string) {
+async function refreshProviderModels(ctx: CommandContext, providerId: string) {
 	let provider: any;
 	try {
 		provider = loadModelsConfig().providers?.[providerId];
@@ -483,7 +483,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	const style = providerStyleOf(provider);
 
 	// Gateway-wide metadata (one call per source) — fetch BEFORE any picker so
-	// it shows real detected values instead of local-rule guesses. Re-probe
+	// it shows real detected values instead of local-rule guesses. Refresh models
 	// always uses the auto profile.
 	const profile = AUTO_PROBE_PROFILE;
 	let gatewayWide: Map<string, ModelProbeInfo> | undefined;
@@ -571,7 +571,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		items.push({ value: id, label: id, description: storedModelSummary(stored) || "no changes", states: ["off", "on"], initial: "on" });
 	}
 
-	const picked = await pickTriState(ctx, `Re-probe ${providerId}`, items);
+	const picked = await pickTriState(ctx, `Refresh models: ${providerId}`, items);
 	if (picked === null) return;
 
 	const addIds: string[] = [];
@@ -608,7 +608,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 			const parts: string[] = [];
 			if (updateIds.length > 0) parts.push(`updated metadata for ${updateIds.length}`);
 			if (removeIds.length > 0) parts.push(`removed ${removeIds.length}`);
-			ctx.ui.notify(`Re-probe: ${parts.join(", ")} in "${providerId}".`, "info");
+			ctx.ui.notify(`Refresh models: ${parts.join(", ")} in "${providerId}".`, "info");
 		}
 	}
 	if (addIds.length > 0) {
@@ -620,7 +620,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	}
 }
 
-// Refresh one model through the same automatic lookup and merge as Re-probe.
+// Refresh one model through the same automatic lookup and merge as Refresh models.
 // Resetting to automatic clears manual overrides only after a successful lookup.
 async function refreshModelMetadata(ctx: CommandContext, providerId: string, modelId: string, automatic = false) {
 	let provider: any;
