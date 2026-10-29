@@ -67,7 +67,6 @@ export async function fetchGatewayWideInfo(
 			}
 			const filled = { ...existing };
 			if (filled.contextWindow === undefined && info.contextWindow !== undefined) filled.contextWindow = info.contextWindow;
-			if (filled.defaultContextWindow === undefined && info.defaultContextWindow !== undefined) filled.defaultContextWindow = info.defaultContextWindow;
 			if (filled.maxTokens === undefined && info.maxTokens !== undefined) filled.maxTokens = info.maxTokens;
 			if (filled.image === undefined && info.image !== undefined) filled.image = info.image;
 			if (filled.video === undefined && info.video !== undefined) filled.video = info.video;
@@ -94,7 +93,7 @@ function applyModelsDevFallback(info: ModelProbeInfo | undefined, modelsDev: Mod
 	if (!modelsDev) return info;
 	const out: ModelProbeInfo = { ...(info ?? {}) };
 	const tagged: NonNullable<ModelProbeInfo["modelsDevFields"]> = [...(info?.modelsDevFields ?? [])];
-	for (const field of ["contextWindow", "defaultContextWindow", "maxTokens", "image", "video", "reasoning", "cost"] as const) {
+	for (const field of ["contextWindow", "maxTokens", "image", "video", "reasoning", "cost"] as const) {
 		if (out[field] === undefined && modelsDev[field] !== undefined) {
 			out[field] = modelsDev[field] as any;
 			tagged.push(field);

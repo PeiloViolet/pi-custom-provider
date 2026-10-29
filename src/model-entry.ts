@@ -1,5 +1,5 @@
 import { serializeApiKey } from "./api-key.ts";
-import { defaultContextWindow } from "./context-window.ts";
+import { automaticContextWindow } from "./context-window.ts";
 import { SPLIT_AUTH } from "./config.ts";
 import { applyModelDefaults, MODEL_INFO_DEFAULTS, resolveModelInfo } from "../vendor/model-probe/index.ts";
 import { PI_THINKING_LEVELS, REASONING_LEVELS } from "./types.ts";
@@ -57,12 +57,11 @@ export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback
 	info = applyModelDefaults(info);
 	const maximum = info.defaultedFields?.includes("contextWindow")
 		? fallback.maxContextWindow : info.contextWindow ?? fallback.maxContextWindow;
-	const initial = defaultContextWindow(maximum, info.defaultContextWindow ?? fallback.defaultContextWindow);
+	const initial = automaticContextWindow(maximum);
 	const opts: ModelOptions = {
 		reasoning: fallback.reasoning,
 		image: info.image ?? fallback.image,
 		contextWindow: maximum ? initial : fallback.contextWindow ?? initial,
-		defaultContextWindow: info.defaultContextWindow ?? fallback.defaultContextWindow,
 		maxContextWindow: maximum,
 		maxTokens: info.maxTokens ?? fallback.maxTokens,
 		cost: info.cost ?? fallback.cost,
@@ -129,12 +128,9 @@ export function buildModelEntry(
 	};
 
 	entry.contextWindow = typeof opts.contextWindow === "number" && opts.contextWindow > 0
-		? opts.contextWindow : defaultContextWindow(opts.maxContextWindow, opts.defaultContextWindow);
-	// Extension metadata; Pi uses contextWindow as the active window. Preserve
-	// the automatic model window and capacity when a manual window is selected.
-	if (typeof opts.defaultContextWindow === "number" && opts.defaultContextWindow > 0) {
-		entry.defaultContextWindow = opts.defaultContextWindow;
-	}
+		? opts.contextWindow : automaticContextWindow(opts.maxContextWindow);
+	// Pi uses contextWindow as the active window; keep reported capacity
+	// separately so manual edits never change the source capacity.
 	if (typeof opts.maxContextWindow === "number" && opts.maxContextWindow > 0) {
 		entry.maxContextWindow = opts.maxContextWindow;
 	}
@@ -223,7 +219,7 @@ export function readModelOptions(model: any): ModelOptions {
 	const image = Array.isArray(model?.input) ? model.input.includes("image") : MODEL_INFO_DEFAULTS.image;
 	const maximum = typeof model?.maxContextWindow === "number" ? model.maxContextWindow : undefined;
 	const contextWindow = typeof model?.contextWindow === "number" ? model.contextWindow
-		: defaultContextWindow(maximum, model?.defaultContextWindow);
+		: automaticContextWindow(maximum);
 	const defaulted = new Set<NonNullable<ModelProbeInfo["defaultedFields"]>[number]>(model?.defaultedFields ?? []);
 	if (!Array.isArray(model?.input)) defaulted.add("image");
 	if (!(typeof model?.maxTokens === "number" && model.maxTokens > 0)) defaulted.add("maxTokens");
@@ -231,7 +227,6 @@ export function readModelOptions(model: any): ModelOptions {
 		...(Array.isArray(model?.manualFields) ? { manualFields: [...model.manualFields] } : {}),
 		image, contextWindow,
 		maxContextWindow: maximum,
-		defaultContextWindow: typeof model?.defaultContextWindow === "number" ? model.defaultContextWindow : undefined,
 		maxTokens: typeof model?.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : MODEL_INFO_DEFAULTS.maxTokens,
 		defaultedFields: [...defaulted],
 		cost: model?.cost,

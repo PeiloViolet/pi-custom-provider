@@ -15,7 +15,7 @@ import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, removeProvide
 import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import { fillCatalogFallback } from "../catalog-fallback.ts";
-import { contextWindowSource, defaultContextWindow } from "../context-window.ts";
+import { contextWindowSource, automaticContextWindow } from "../context-window.ts";
 import { promptModelMetadata } from "../ui/prompts.ts";
 import { selectOne } from "../ui/select.ts";
 import type { GatewayProbeProfile } from "../presets.ts";
@@ -134,8 +134,8 @@ export function providerModelItems(provider: any): SelectItem[] {
 				else if (defaulted.has("image")) details.push("image:off [runtime fallback]");
 				if (typeof model.contextWindow === "number") {
 					const source = model.manualFields?.includes("context") ? "manual"
-						: model.contextWindow === defaultContextWindow(model.maxContextWindow, model.defaultContextWindow)
-							? contextWindowSource(model.maxContextWindow, model.defaultContextWindow) : "stored";
+						: model.contextWindow === automaticContextWindow(model.maxContextWindow)
+							? contextWindowSource(model.maxContextWindow) : "stored";
 					details.push(`context ${model.contextWindow} [${source}]`);
 				}
 				if (typeof model.maxContextWindow === "number") details.push(`max-context ${model.maxContextWindow}`);
@@ -355,7 +355,7 @@ export function probePickerItems(
 		const opts = modelOptionsFromProbe(info, { reasoning: "xhigh", image: false });
 		return {
 			value: id, label: id,
-			description: [`Automatic context ${defaultContextWindow(opts.maxContextWindow, opts.defaultContextWindow)} [${contextWindowSource(opts.maxContextWindow, opts.defaultContextWindow)}]`, describeProbeInfo(info)].filter(Boolean).join(" • "),
+			description: [`Automatic context ${automaticContextWindow(opts.maxContextWindow)} [${contextWindowSource(opts.maxContextWindow)}]`, describeProbeInfo(info)].filter(Boolean).join(" • "),
 		};
 	});
 }

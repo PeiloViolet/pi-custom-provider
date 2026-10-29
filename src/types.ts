@@ -14,9 +14,8 @@ export const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "x
 export type ModelOptions = {
 	reasoning: ReasoningCeiling;
 	image: boolean;
-	// Active window, the reported model default, and advertised capacity are distinct.
+	// The runtime window and queried model capacity are distinct.
 	contextWindow?: number;
-	defaultContextWindow?: number;
 	maxContextWindow?: number;
 	maxTokens?: number;
 	// Fields explicitly edited by the user; all others refresh automatically.

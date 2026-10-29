@@ -37,12 +37,11 @@ Runs on Node >= 22.18 (TypeScript type stripping, no build step).
   `profile: { modelsDev: false }`. Catalog limits are preserved as queried;
   no model-name rules or output/context heuristics rewrite them.
 - **Runtime fallbacks** — when no source reports an output limit, use 32,000
-  for every API, tagged in `defaultedFields`. Model metadata can report a
-  default window separately from maximum capacity: preserve `context_window`
-  + `max_context_window` as `defaultContextWindow` + `contextWindow`.
-  Missing model context is not fabricated here. The extension chooses the
-  reported default, otherwise half capacity, otherwise a uniform 65,536
-  runtime window, and labels that source separately.
+  for every API, tagged in `defaultedFields`. Context metadata contains only
+  queried capacity. No independent model default or Codex-specific context
+  field pair is inferred. The extension selects half the capacity, or the
+  uniform 65,536 runtime window when capacity is missing, and labels the
+  runtime policy separately from queried metadata.
 - **Defaults** — fields nothing else answered are filled from
   `MODEL_INFO_DEFAULTS` (`maxTokens: 32000`, `image: false`, `video: false`, `reasoning: true`)
   and tagged in
@@ -137,7 +136,6 @@ const { ids, infoById, baseUrl } = await probeModels("http://localhost:4000");
 ```ts
 type ModelProbeInfo = {
 	contextWindow?: number; // reported capacity
-	defaultContextWindow?: number; // separately reported model default
 	maxTokens?: number; // max output tokens
 	image?: boolean;    // accepts image input
 	video?: boolean;    // accepts video input
@@ -145,7 +143,7 @@ type ModelProbeInfo = {
 	alwaysThinking?: boolean;
 	effortOptions?: string[];
 	endpointTypes?: string[]; // New API / One API supported_endpoint_types
-	modelsDevFields?: Array<"contextWindow" | "defaultContextWindow" | "maxTokens" | "image" | "video" | "reasoning">; // from models.dev
+	modelsDevFields?: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning">; // from models.dev
 	defaultedFields?: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "effortOptions">; // runtime fallbacks
 };
 ```

@@ -103,12 +103,13 @@ Every field is resolved in tiers, highest priority first:
    API; image/video default off and reasoning defaults on. These are extension
    settings, persisted in `defaultedFields`, not queried model facts.
 
-Automatic context uses a separately reported model default first, bounded by
-known capacity. With only maximum capacity it uses half, rounded down (minimum
-one token): a 1,050,000 maximum gives a 525,000 active window. With neither value,
-it uses the uniform 65,536 runtime window. Rows distinguish `model default`,
-`half capacity`, and `runtime fallback`; a fallback never becomes reported
-maximum capacity or a reported model default. Manual windows remain protected.
+Automatic context is an extension runtime policy: use half the queried
+capacity, rounded down (minimum one token), so a 1,050,000 capacity gives a
+525,000 active window. With no capacity data, use the uniform 65,536 runtime
+window. Rows distinguish `half capacity` and `runtime fallback`; the active
+window is never described as a queried model default. Manual windows remain
+protected. The parser does not infer a separate model default from field names
+or import Codex-specific context metadata.
 
 Only tiers 1–2 ever rewrite an existing entry during model refresh;
 defaults are starting points for new models. Video input is tracked and shown

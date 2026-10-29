@@ -189,7 +189,6 @@ export function probeInfoSummary(info: ModelProbeInfo | undefined): string[] {
 	const defaulted = new Set(info.defaultedFields ?? []);
 	const parts: string[] = [];
 	if (info.contextWindow !== undefined && !defaulted.has("contextWindow")) parts.push("context");
-	if (info.defaultContextWindow !== undefined) parts.push("default context");
 	if (info.maxTokens !== undefined && !defaulted.has("maxTokens")) parts.push("maxTokens");
 	if (info.reasoning !== undefined && !defaulted.has("reasoning")) parts.push("reasoning");
 	if (info.image !== undefined && !defaulted.has("image")) parts.push("image");
@@ -233,13 +232,12 @@ export function describeProbeInfo(info: ModelProbeInfo | undefined): string | un
 	if (!info) return undefined;
 	const fromModelsDev = new Set(info.modelsDevFields ?? []);
 	const defaulted = new Set(info.defaultedFields ?? []);
-	const tag = (field: "contextWindow" | "defaultContextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "cost") =>
+	const tag = (field: "contextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "cost") =>
 		fromModelsDev.has(field) ? " [models.dev]" : "";
 	const parts: string[] = [];
 	// Limit fields filled by runtime fallbacks (tagged defaulted) carry no real
 	// information about the model — don't show them.
 	if (info.contextWindow !== undefined && !defaulted.has("contextWindow")) parts.push(`Maximum context ${info.contextWindow}${tag("contextWindow")}`);
-	if (info.defaultContextWindow !== undefined) parts.push(`Model default context ${info.defaultContextWindow}${tag("defaultContextWindow")}`);
 	if (info.maxTokens !== undefined && !defaulted.has("maxTokens")) parts.push(`max-out ${info.maxTokens}${tag("maxTokens")}`);
 	// Only values that differ from the defaults (image/video: false,
 	// reasoning: true) are worth showing — a model with default values gets
@@ -254,18 +252,11 @@ export function describeProbeInfo(info: ModelProbeInfo | undefined): string | un
 	return parts.length > 0 ? parts.join(" • ") : undefined;
 }
 
-// Some model catalogs report a default window separately from maximum capacity
-// (e.g. context_window + max_context_window). Keep those reported values apart.
+// Read capacity from the supported endpoint fields, root before gateway meta.
+// Runtime window policy is applied separately by the extension.
 function parseContextFields(source: any, info: ModelProbeInfo, ...capacityKeys: string[]): void {
-	const meta = source?.meta;
-	const maximum = firstFiniteNumber(source, "max_context_window", "maxContextWindow")
-		?? firstFiniteNumber(meta, "max_context_window", "maxContextWindow");
-	const window = firstFiniteNumber(source, ...capacityKeys) ?? firstFiniteNumber(meta, ...capacityKeys);
-	const reportedDefault = firstFiniteNumber(source, "default_context_window", "defaultContextWindow")
-		?? firstFiniteNumber(meta, "default_context_window", "defaultContextWindow")
-		?? (maximum !== undefined ? window : undefined);
-	if (info.contextWindow === undefined && (maximum ?? window) !== undefined) info.contextWindow = maximum ?? window;
-	if (info.defaultContextWindow === undefined && reportedDefault !== undefined) info.defaultContextWindow = reportedDefault;
+	const capacity = firstFiniteNumber(source, ...capacityKeys) ?? firstFiniteNumber(source?.meta, ...capacityKeys);
+	if (info.contextWindow === undefined && capacity !== undefined) info.contextWindow = capacity;
 }
 
 // One API / New API gateways (and their forks) attach extra model metadata

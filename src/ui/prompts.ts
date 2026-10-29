@@ -2,7 +2,7 @@ import { BUILTIN_COLLISION_WARNING, BUILTIN_PROVIDER_IDS, loadModelsConfig } fro
 import { MODEL_INFO_DEFAULTS, resolveModelInfo } from "../../vendor/model-probe/index.ts";
 import { REASONING_LEVELS } from "../types.ts";
 import { buildModelEntry, modelOptionsFromProbe } from "../model-entry.ts";
-import { contextWindowSource, defaultContextWindow } from "../context-window.ts";
+import { contextWindowSource, automaticContextWindow } from "../context-window.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ProviderApi, ProviderStyle, ReasoningCeiling, SelectItem } from "../types.ts";
 import { normalizeEndpoint, slugify, suggestProviderId } from "../url.ts";
 import { selectOne } from "./select.ts";
@@ -86,12 +86,12 @@ export async function promptMaxTokens(ctx: CommandContext, current?: number): Pr
 
 // The same capability fields and prompts serve staged and persisted models.
 export function modelMetadataItems(opts: ModelOptions): SelectItem[] {
-	const automaticWindow = defaultContextWindow(opts.maxContextWindow, opts.defaultContextWindow);
+	const automaticWindow = automaticContextWindow(opts.maxContextWindow);
 	const defaulted = new Set<string>(opts.defaultedFields ?? []);
 	return [
 		{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → max)" },
 		{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
-		{ value: "context", label: "Context window", suffix: ` • ${opts.contextWindow ?? "unset"}`, description: `Automatic context: ${automaticWindow} [${contextWindowSource(opts.maxContextWindow, opts.defaultContextWindow)}] • Maximum context: ${opts.maxContextWindow ?? "not reported"}. Select a window to use.` },
+		{ value: "context", label: "Context window", suffix: ` • ${opts.contextWindow ?? "unset"}`, description: `Automatic context: ${automaticWindow} [${contextWindowSource(opts.maxContextWindow)}] • Maximum context: ${opts.maxContextWindow ?? "not reported"}. Select a window to use.` },
 		{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${opts.maxTokens ?? "unset"}`, description: "Max tokens this model may generate" },
 	].map((item) => {
 		const manual = opts.manualFields?.includes(item.value);
@@ -121,9 +121,9 @@ export async function editModelMetadataField(ctx: CommandContext, opts: ModelOpt
 		if (value === null) return false;
 		opts.image = value;
 	} else if (field === "context") {
-		const automaticWindow = defaultContextWindow(opts.maxContextWindow, opts.defaultContextWindow);
+		const automaticWindow = automaticContextWindow(opts.maxContextWindow);
 		const choice = await selectOne(ctx, "Context window", [
-			{ value: "automatic", label: "Automatic", suffix: ` • ${automaticWindow}`, description: `Use ${contextWindowSource(opts.maxContextWindow, opts.defaultContextWindow)}; update automatically when metadata is refreshed` },
+			{ value: "automatic", label: "Automatic", suffix: ` • ${automaticWindow}`, description: `Use ${contextWindowSource(opts.maxContextWindow)}; update automatically when metadata is refreshed` },
 			{ value: "manual", label: "Manual", description: `Enter a window size. Maximum context: ${opts.maxContextWindow ?? "unknown"}` },
 		], { initialIndex: opts.manualFields?.includes("context") ? 1 : 0 });
 		if (!choice) return false;

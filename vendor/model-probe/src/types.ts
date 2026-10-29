@@ -16,7 +16,6 @@ export type ModelCostInfo = {
 
 export type ModelProbeInfo = {
 	contextWindow?: number; // reported model capacity (not an API default)
-	defaultContextWindow?: number; // reported model default, when separately available
 	maxTokens?: number; // max output tokens
 	image?: boolean; // accepts image input
 	video?: boolean; // accepts video input
@@ -25,7 +24,7 @@ export type ModelProbeInfo = {
 	alwaysThinking?: boolean; // reasoning exists but cannot be turned off
 	effortOptions?: string[]; // provider reasoning-effort names (none/minimal/low/.../max)
 	endpointTypes?: string[]; // New API / One API: supported_endpoint_types (chat, embeddings, ...)
-	modelsDevFields?: Array<"contextWindow" | "defaultContextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "cost">; // which fields came from models.dev
+	modelsDevFields?: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "cost">; // which fields came from models.dev
 	defaultedFields?: Array<"contextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "effortOptions">; // runtime fallbacks, never queried model facts
 };
 
