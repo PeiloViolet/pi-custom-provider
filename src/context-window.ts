@@ -1,5 +1,8 @@
-// Application default shared by every model. Only a known capacity can lower
-// it; protocol fallback values are not advertised model capacities.
-export function defaultContextWindow(maximum?: number): number {
-	return maximum && maximum > 0 ? Math.min(262144, maximum) : 262144;
+import { API_FALLBACK_LIMITS } from "../vendor/model-probe/index.ts";
+
+// Reuse the probe's existing protocol default. Advertised model capacity can
+// lower the active window; model names never select a different default.
+export function defaultContextWindow(maximum?: number, api = "openai-completions"): number {
+	const baseline = (API_FALLBACK_LIMITS[api] ?? API_FALLBACK_LIMITS["openai-completions"]).contextWindow;
+	return maximum && maximum > 0 ? Math.min(baseline, maximum) : baseline;
 }

@@ -150,7 +150,7 @@ export async function reviewModelEntries(
 	ctx: CommandContext, ids: string[], infoById: Map<string, ModelProbeInfo>, api: ProviderApi,
 ): Promise<Map<string, ModelOptions> | null> {
 	const options = new Map(ids.map((id) => [id, modelOptionsFromProbe(
-		resolveModelInfo(id, infoById.get(id), undefined, api), { reasoning: "xhigh", image: false },
+		resolveModelInfo(id, infoById.get(id), undefined, api), { reasoning: "xhigh", image: false }, api,
 	)]));
 	let cursor = 0;
 	while (true) {
@@ -303,7 +303,7 @@ export async function addModelEntriesToProvider(
 			const mergedInfo = resolveModelInfo(id, infoById?.get(id), undefined, api);
 			if (probeInfoSummary(mergedInfo).length > 0) detectedCount++;
 			const override = optionOverrides?.get(id);
-			const opts = override ?? modelOptionsFromProbe(mergedInfo, defaultOpts);
+			const opts = override ?? modelOptionsFromProbe(mergedInfo, defaultOpts, api);
 			models.push(buildModelEntry(id, opts));
 		}
 		p.models = models;
@@ -343,7 +343,7 @@ export function probePickerItems(
 ): ProbeItem[] {
 	return ids.map((id) => {
 		const info = resolveModelInfo(id, infoById.get(id), modelsDev, api);
-		const opts = modelOptionsFromProbe(info, { reasoning: "xhigh", image: false });
+		const opts = modelOptionsFromProbe(info, { reasoning: "xhigh", image: false }, api);
 		return {
 			value: id, label: id,
 			description: [`Default context ${opts.defaultContextWindow}`, describeProbeInfo(info)].filter(Boolean).join(" • "),

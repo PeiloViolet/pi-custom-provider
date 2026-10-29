@@ -192,7 +192,7 @@ export async function promptManualModels(
 						? "openai-responses"
 						: "openai-completions";
 		const resolved = resolveModelInfo(id, undefined, undefined, api);
-		const opts = modelOptionsFromProbe(resolved, { reasoning: "xhigh", image: false });
+		const opts = modelOptionsFromProbe(resolved, { reasoning: "xhigh", image: false }, api);
 		const edited = await promptModelMetadata(ctx, `Edit ${id}`, opts);
 		if (!edited) continue;
 		ids.push(id);

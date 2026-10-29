@@ -135,17 +135,57 @@ test('Esc in the common model list cancels adding without accepting drafts', asy
  ui.done();
 });
 
-test('every model family shares the default window and clamps only to known capacity', () => {
+test('all model names reuse existing protocol defaults, capped by known model capacity', () => {
  const ids = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-luna', 'claude-sonnet-4-6', 'gemini-2.5-pro', 'unknown'];
- for (const maximum of [undefined, 64000, 200000, 1050000]) {
-  const info = maximum === undefined ? undefined : new Map(ids.map(id => [id, { contextWindow: maximum }]));
-  const config = buildProviderConfig('openai-responses', 'openai-responses', 'https://relay.example/v1',
-   { mode: 'none' }, ids, { reasoning: 'xhigh', image: false }, undefined, info);
-  for (const model of config.models) {
-   assert.equal(model.contextWindow, Math.min(262144, maximum ?? Infinity), model.id);
-   assert.equal(model.maxContextWindow, maximum, model.id);
+ const protocols = [['openai', 'openai-completions', 258000], ['openai-responses', 'openai-responses', 258000],
+  ['anthropic', 'anthropic-messages', 200000], ['gemini', 'google-generative-ai', 1048576]];
+ for (const [style, api, baseline] of protocols) {
+  assert.equal(defaultContextWindow(undefined, api), baseline);
+  for (const maximum of [undefined, 64000, 200000, 1050000]) {
+   const info = maximum === undefined ? undefined : new Map(ids.map(id => [id, { contextWindow: maximum }]));
+   const config = buildProviderConfig(style, api, 'https://relay.example/v1',
+    { mode: 'none' }, ids, { reasoning: 'xhigh', image: false }, undefined, info);
+   for (const model of config.models) {
+    const expected = Math.min(baseline, maximum ?? Infinity);
+    assert.equal(model.contextWindow, expected, `${api}: ${model.id}`);
+    assert.equal(model.maxContextWindow, maximum);
+    assert.equal(readModelOptions(model, api).defaultContextWindow, expected);
+    const fresh = { contextWindow: maximum ?? 1050000 };
+    const stored = { ...model, contextWindow: 777777 };
+    applyMetaChanges(stored, diffStoredModel(stored, fresh, api));
+    assert.equal(stored.contextWindow, Math.min(baseline, fresh.contextWindow));
+    const manual = { ...model, contextWindow: 12345, manualFields: ['context'] };
+    applyMetaChanges(manual, diffStoredModel(manual, fresh, api));
+    assert.equal(manual.contextWindow, 12345);
+   }
   }
  }
+});
+
+test('review and Automatic context editing use the selected protocol default', async () => {
+ for (const [api, baseline] of [['openai-responses', 258000], ['anthropic-messages', 200000], ['google-generative-ai', 1048576]]) {
+  const ui = scriptedUi([{ title: 'Edit models', search: 'Done' }]);
+  const options = await reviewModelEntries(ui.ctx, ['any-model'], new Map(), api);
+  const opts = options.get('any-model');
+  assert.equal(opts.contextWindow, baseline);
+  assert.equal(opts.defaultContextWindow, baseline);
+  assert.equal(opts.maxContextWindow, undefined);
+  ui.done();
+  const saved = buildModelEntry('any-model', { ...opts, contextWindow: 12345, manualFields: ['context'] });
+  const reopened = readModelOptions(saved, api);
+  const reset = scriptedUi([{ title: 'Context window', search: 'Automatic' }]);
+  assert.equal(await editModelMetadataField(reset.ctx, reopened, 'context'), true);
+  assert.equal(buildModelEntry('any-model', reopened).contextWindow, baseline);
+  assert.equal(reopened.manualFields, undefined);
+  reset.done();
+ }
+});
+
+test('model API overrides provider API when reopening or refreshing context', () => {
+ const model = { id: 'gpt-test', api: 'anthropic-messages', contextWindow: 258000, maxContextWindow: 1050000 };
+ assert.equal(readModelOptions(model, 'openai-completions').defaultContextWindow, 200000);
+ applyMetaChanges(model, diffStoredModel(model, { contextWindow: 1050000 }, 'openai-completions'));
+ assert.equal(model.contextWindow, 200000);
 });
 
 test('model names supply no capability or capacity metadata', () => {
@@ -171,35 +211,35 @@ test('default context stays separate from maximum capacity through acceptance an
  const config = buildProviderConfig('openai-responses', 'openai-responses', 'https://relay.example/v1',
   { mode: 'none' }, [id], { reasoning: 'xhigh', image: false }, undefined, new Map([[id, capacity]]));
  const model = config.models[0];
- assert.equal(model.contextWindow, 262144);
+ assert.equal(model.contextWindow, 258000);
  assert.equal(model.maxContextWindow, 1050000);
  assert.equal(model.maxTokens, 128000);
  const opts = readModelOptions(model);
- assert.equal(opts.defaultContextWindow, 262144);
+ assert.equal(opts.defaultContextWindow, 258000);
  assert.equal(opts.maxContextWindow, 1050000);
  assert.equal(defaultContextWindow(200000), 200000);
- assert.equal(defaultContextWindow(1000000), 262144);
- assert.equal(defaultContextWindow(), 262144);
+ assert.equal(defaultContextWindow(1000000), 258000);
+ assert.equal(defaultContextWindow(), 258000);
 });
 
 test('protocol fallback is not advertised capacity or a cap on the default context', () => {
  const config = buildProviderConfig('openai-responses', 'openai-responses', 'https://relay.example/v1',
   { mode: 'none' }, ['gpt-6.1-sol'], { reasoning: 'xhigh', image: false });
  const model = config.models[0];
- assert.equal(model.contextWindow, 262144);
+ assert.equal(model.contextWindow, 258000);
  assert.equal(model.maxContextWindow, undefined);
  const opts = readModelOptions(model);
- assert.equal(opts.defaultContextWindow, 262144);
+ assert.equal(opts.defaultContextWindow, 258000);
  assert.equal(opts.maxContextWindow, undefined);
  const legacy = readModelOptions({ id: 'gpt-6.1-sol', contextWindow: 258000 });
  assert.equal(legacy.contextWindow, 258000);
- assert.equal(legacy.defaultContextWindow, 262144);
+ assert.equal(legacy.defaultContextWindow, 258000);
  assert.equal(legacy.maxContextWindow, undefined);
 });
 
 test('context has automatic and manual modes; manual maximum survives save and can reset', async () => {
  const id = 'gpt-6.1-sol';
- const opts = readModelOptions({ id, input: ['text'], contextWindow: 262144, maxContextWindow: 1050000 });
+ const opts = readModelOptions({ id, input: ['text'], contextWindow: 258000, maxContextWindow: 1050000 });
  const ui = scriptedUi([{ title: 'Context window', search: 'Manual' }], ['1050000']);
  assert.equal(await editModelMetadataField(ui.ctx, opts, 'context'), true);
  const entry = buildModelEntry(id, opts);
@@ -209,7 +249,7 @@ test('context has automatic and manual modes; manual maximum survives save and c
  const restored = readModelOptions(entry);
  const reset = scriptedUi([{ title: 'Context window', search: 'Automatic' }]);
  assert.equal(await editModelMetadataField(reset.ctx, restored, 'context'), true);
- assert.equal(buildModelEntry(id, restored).contextWindow, 262144);
+ assert.equal(buildModelEntry(id, restored).contextWindow, 258000);
  assert.equal(buildModelEntry(id, restored).manualFields, undefined);
  ui.done(); reset.done();
 });
@@ -229,12 +269,12 @@ test('automatic refresh replaces any legacy window even when maximum metadata al
  for (const previous of [undefined, 128000, 258000, 400000, 1050000]) {
   const model = { id: 'gpt-6.1-sol', contextWindow: previous, maxContextWindow: 1050000 };
   applyMetaChanges(model, diffStoredModel(model, { contextWindow: 1050000 }));
-  assert.equal(model.contextWindow, 262144);
+  assert.equal(model.contextWindow, 258000);
   assert.equal(model.maxContextWindow, 1050000);
   assert.deepEqual(diffStoredModel(model, { contextWindow: 1050000 }), []);
  }
  const stringChanges = diffStoredModel('gpt-6.1-sol', { contextWindow: 1050000 });
- assert.equal(stringChanges.find(change => change.key === 'contextWindow').value, 262144);
+ assert.equal(stringChanges.find(change => change.key === 'contextWindow').value, 258000);
 });
 
 test('only manually edited fields survive refresh; other metadata and capacity still update', () => {
@@ -280,11 +320,11 @@ test('missing reasoning levels preserve an exact map while explicit disable clea
 
 test('legacy string model editor uses the common automatic default', async () => {
  const opts = readModelOptions('gpt-6.1-sol');
- assert.equal(opts.defaultContextWindow, 262144);
+ assert.equal(opts.defaultContextWindow, 258000);
  const ui = scriptedUi([{ title: 'Context window', search: 'Automatic' }]);
  assert.equal(await editModelMetadataField(ui.ctx, opts, 'context'), true);
  const model = buildModelEntry('gpt-6.1-sol', opts);
- assert.equal(model.contextWindow, 262144);
+ assert.equal(model.contextWindow, 258000);
  assert.equal(model.manualFields, undefined);
  ui.done();
 });

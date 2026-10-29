@@ -53,11 +53,11 @@ function ceilingFromThinkingMap(map: Record<string, string | null>): ReasoningCe
 // reasoning on); the wizard fallback only supplies the reasoning ceiling for
 // thinking models. (model-probe also tracks video input, but pi's model config
 // only supports text/image, so it isn't carried into ModelOptions.)
-export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions): ModelOptions {
+export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions, api?: ProviderApi): ModelOptions {
 	if (!info) return fallback;
 	const maximum = info.defaultedFields?.includes("contextWindow")
 		? fallback.maxContextWindow : info.contextWindow ?? fallback.maxContextWindow;
-	const initial = defaultContextWindow(maximum);
+	const initial = defaultContextWindow(maximum, api);
 	const opts: ModelOptions = {
 		reasoning: fallback.reasoning,
 		image: info.image ?? fallback.image,
@@ -180,12 +180,12 @@ export function buildProviderConfig(
 		// like pi's own /login flow. Only OMP keeps it inline.
 		...(!SPLIT_AUTH && serializedApiKey ? { apiKey: serializedApiKey } : {}),
 		models: modelIds.map((id) => {
-			// resolveModelInfo layers detected metadata over models.dev, the local
-			// rules, the api fallback, and the built-in defaults — including for
+			// resolveModelInfo layers detected metadata over models.dev, the
+			// api fallback, and the built-in defaults — including for
 			// manually added models, which have no probe info at all.
 			const info = resolveModelInfo(id, infoById?.get(id), undefined, api);
 			const override = optionOverrides?.get(id);
-			const modelOpts = override ?? modelOptionsFromProbe(info, opts);
+			const modelOpts = override ?? modelOptionsFromProbe(info, opts, api);
 			return buildModelEntry(id, modelOpts, ceilingOverrides);
 		}),
 	};
@@ -209,7 +209,7 @@ export function buildProviderConfig(
 
 // Read the reasoning ceiling + image flag already stored on a model entry,
 // mirroring pi's getSupportedThinkingLevels so edit defaults match reality.
-export function readModelOptions(model: any): ModelOptions {
+export function readModelOptions(model: any, api?: ProviderApi): ModelOptions {
 	const image = Array.isArray(model?.input) ? model.input.includes("image") : true;
 	const contextWindow = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
 	const maximum = typeof model?.maxContextWindow === "number" ? model.maxContextWindow : undefined;
@@ -217,7 +217,7 @@ export function readModelOptions(model: any): ModelOptions {
 		...(Array.isArray(model?.manualFields) ? { manualFields: [...model.manualFields] } : {}),
 		image, contextWindow,
 		maxContextWindow: maximum,
-		defaultContextWindow: defaultContextWindow(maximum),
+		defaultContextWindow: defaultContextWindow(maximum, model?.api ?? api),
 		maxTokens: typeof model?.maxTokens === "number" ? model.maxTokens : undefined,
 		cost: model?.cost,
 	};
