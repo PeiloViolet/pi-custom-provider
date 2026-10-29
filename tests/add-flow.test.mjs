@@ -87,7 +87,7 @@ for (const source of ['custom', 'catalog']) test(`${source}: select IDs only, th
    }
    if (step.title === 'Edit models') {
     assert.equal(selected, true);
-    assert.match(rendered, /context 525000 \[half capacity\]/);
+    assert.match(rendered, /context 525000 \[50%\]/);
     assert.match(rendered, /max-context 1050000/);
     assert.doesNotMatch(rendered, /context 1050000 \[/);
    }

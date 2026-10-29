@@ -9,5 +9,5 @@ export function automaticContextWindow(maximum?: number): number {
 
 export function contextWindowSource(maximum?: number): string {
 	return typeof maximum === "number" && Number.isFinite(maximum) && maximum > 0
-		? "half capacity" : "runtime fallback";
+		? "50%" : "runtime fallback";
 }

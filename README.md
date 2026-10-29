@@ -106,7 +106,7 @@ Every field is resolved in tiers, highest priority first:
 Automatic context is an extension runtime policy: use half the queried
 capacity, rounded down (minimum one token), so a 1,050,000 capacity gives a
 525,000 active window. With no capacity data, use the uniform 65,536 runtime
-window. Rows distinguish `half capacity` and `runtime fallback`; the active
+window. Rows distinguish `50%` and `runtime fallback`; the active
 window is never described as a queried model default. Manual windows remain
 protected. The parser does not infer a separate model default from field names
 or import Codex-specific context metadata.

@@ -210,7 +210,7 @@ test('runtime provenance survives saving, manual edits and replacement with quer
  assert.equal(model.defaultedFields?.includes('image') ?? false, false);
  assert.equal(model.defaultedFields?.includes('maxTokens') ?? false, false);
  assert.equal(model.defaultedFields?.includes('effortOptions') ?? false, false);
- assert.match(providerModelItems({ models: [model] })[0].suffix, /context 525000 \[half capacity\]/);
+ assert.match(providerModelItems({ models: [model] })[0].suffix, /context 525000 \[50%\]/);
  assert.equal(readModelOptions('legacy-model').image, false);
 });
 
