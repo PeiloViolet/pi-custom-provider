@@ -5,12 +5,12 @@ import type { ModelProbeInfo } from "./types.ts";
 export type MetaChange = { key: string; value: unknown; label: string };
 
 export function automaticMetadataFields(info: ModelProbeInfo): Set<keyof ModelProbeInfo> {
-	const guessed = new Set<string>([...(info.inferredFields ?? []), ...(info.defaultedFields ?? [])]);
+	const defaulted = new Set<string>(info.defaultedFields ?? []);
 	const fields: (keyof ModelProbeInfo)[] = ["contextWindow", "maxTokens", "image", "reasoning", "cost"];
-	return new Set(fields.filter((field) => info[field] !== undefined && !guessed.has(field)));
+	return new Set(fields.filter((field) => info[field] !== undefined && !defaulted.has(field)));
 }
 
-// Missing and guessed values never erase real metadata. Only explicitly edited
+// Missing and defaulted values never erase real metadata. Only explicitly edited
 // fields opt out; legacy entries without manualFields are fully automatic.
 export function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
 	const manual = new Set<string>(model?.manualFields ?? []);
@@ -19,7 +19,7 @@ export function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] 
 	const patch: Record<string, unknown> = {};
 	if (known("contextWindow")) {
 		patch.maxContextWindow = info.contextWindow;
-		if (!manual.has("context")) patch.contextWindow = defaultContextWindow(typeof model === "string" ? model : model?.id ?? "", info.contextWindow);
+		if (!manual.has("context")) patch.contextWindow = defaultContextWindow(info.contextWindow);
 	}
 	if (known("maxTokens") && !manual.has("maxtokens")) patch.maxTokens = info.maxTokens;
 	if (known("image") && !manual.has("image")) patch.input = info.image ? ["text", "image"] : ["text"];

@@ -31,8 +31,8 @@ provider——无需手工编辑配置文件。
 - **事后一切可改** —— 逐模型字段(reasoning 上限、图像输入、上下文窗口、
   最大输出 token、headers/端点覆盖)、批量删除模型、provider 的 API
   flavor、端点、重命名、删除。
-- **合理且诚实的默认值** —— 实测值优先;推测值在选择器中带标记
-  (`[models.dev]` / `[local rules]`);默认值填充的项不显示。目录里的
+- **合理且诚实的默认值** —— 实测值优先;目录资料在选择器中带标记
+  (`[models.dev]`);默认值不作为实测能力展示。目录里的
   退化数据(`maxTokens == contextWindow`)会自动钳制。
 - **developer role 探测** —— 拒绝 OpenAI `developer` 角色的端点(比如
   Kimi 订阅端点)会自动写入 `compat.supportsDeveloperRole: false`,pi 就会
@@ -97,17 +97,11 @@ YAML 子集)。
    和 `supported_endpoint_types`)、Gemini 的 `inputTokenLimit`、Ollama 的
    `/api/tags` + `/api/show`。
 2. **models.dev** —— 精确到单个模型的目录条目,标记 `[models.dev]`。
-3. **本地规则** —— 内置知名模型表(OpenAI、Anthropic、DeepSeek、Qwen、
-   Kimi、GLM、Gemini 等),标记 `[local rules]`。匹配前会先归一化 id,
-   所以中转装饰过的 id(`bailian/deepseek-v4-pro`、`gpt-5@20250807`、
-   `claude-sonnet-4-6[1m]`)也能命中。可通过 `~/.model-probe-rules.json`
-   扩展(见
-   [model-probe](https://github.com/real-wudaoshi/model-probe#custom-rules))。
-4. **协议兜底** —— 其他来源都不知道时,按协议给限制值(anthropic
+3. **协议兜底** —— 其他来源都不知道时,按协议给限制值(anthropic
    200K/32K、google 1M/64K、openai 258K/32K)。
-5. **默认值** —— `image: false`、`video: false`、`reasoning: true`。
+4. **默认值** —— `image: false`、`video: false`、`reasoning: true`。
 
-刷新模型信息时只有第 1–2 层的值会改写已有配置;推测值和默认值只是新模型的
+刷新模型信息时只有第 1–2 层的值会改写已有配置;默认值只是新模型的
 起点。视频输入会被探测并作为选择器标签展示,但 pi 的模型配置没有 video
 字段,仅用于展示。
 
@@ -117,8 +111,7 @@ YAML 子集)。
 内联 `pricing`),或模型命中 models.dev 目录条目时,扩展会把 pi 的
 `cost` 字段(每百万 token 美元价:input / output / cacheRead /
 cacheWrite)写进模型条目——和内置 provider 自带的字段一致——这样 pi 的
-用量统计也能给自定义 provider 估算会话成本。价格绝不猜测:没有本地规则,
-没有默认值。中转网关显示的价格是官方标价,可能与中转实际计费不同。
+用量统计也能给自定义 provider 估算会话成本。价格不使用推测值或默认值。中转网关显示的价格是官方标价,可能与中转实际计费不同。
 
 ## 存储
 

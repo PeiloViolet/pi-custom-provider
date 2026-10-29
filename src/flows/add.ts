@@ -189,7 +189,7 @@ async function collectModelIds(
 				}
 			}
 
-			// models.dev catalog tier — above the local rules, below detected values.
+			// Catalog values fill fields the endpoint did not report.
 			const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
 
 			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById, modelsDev, api));
@@ -267,7 +267,7 @@ async function addCustom(ctx: CommandContext) {
 		apiKey,
 		dedupe(collected.ids),
 		// The reasoning ceiling for thinking models defaults to xhigh; image /
-		// context / reasoning come from the probe (models.dev, local rules,
+		// context / reasoning come from the probe (models.dev,
 		// then model-probe defaults). Tune per model later via Edit provider →
 		// Edit a model.
 		{ reasoning: "xhigh", image: true },
@@ -283,14 +283,12 @@ async function addCustom(ctx: CommandContext) {
 	const probedCount = infoById
 		? collected.ids.filter((id) => {
 				const info = infoById.get(id);
-				return info && !info.inferred && probeInfoSummary(info).length > 0;
+				return info && probeInfoSummary(info).length > 0;
 			}).length
 		: 0;
-	const inferredCount = infoById ? collected.ids.filter((id) => infoById.get(id)?.inferred).length : 0;
-	const defaultedCount = collected.ids.length - probedCount - inferredCount;
+	const defaultedCount = collected.ids.length - probedCount;
 	const summary: string[] = [];
 	if (probedCount > 0) summary.push(`detected ${probedCount}`);
-	if (inferredCount > 0) summary.push(`inferred from known models ${inferredCount}`);
 	if (defaultedCount > 0) summary.push(`defaults ${defaultedCount}`);
 	ctx.ui.notify(
 		`Saved provider "${providerId}" to ${MODELS_JSON_PATH}` + (summary.length > 0 ? ` — context/image/reasoning: ${summary.join(", ")}` : ""),

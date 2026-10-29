@@ -46,7 +46,7 @@ test('endpoint-matched catalog values win and input map is not mutated', async (
  assert.equal(matched.has('claude-custom'), false);
 });
 
-test('unknown IDs and failed lookups leave local rules/defaults available', async () => {
+test('unknown IDs and failed lookups leave defaults available', async () => {
  const info = await fillCatalogFallback(['unknown', 'unavailable'], new Map(), async id => {
   if (id === 'unavailable') throw new Error('catalog offline');
   return [];

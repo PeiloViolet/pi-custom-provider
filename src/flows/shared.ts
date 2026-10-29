@@ -150,7 +150,7 @@ export async function reviewModelEntries(
 	ctx: CommandContext, ids: string[], infoById: Map<string, ModelProbeInfo>, api: ProviderApi,
 ): Promise<Map<string, ModelOptions> | null> {
 	const options = new Map(ids.map((id) => [id, modelOptionsFromProbe(
-		resolveModelInfo(id, infoById.get(id), undefined, api), { reasoning: "xhigh", image: false }, id,
+		resolveModelInfo(id, infoById.get(id), undefined, api), { reasoning: "xhigh", image: false },
 	)]));
 	let cursor = 0;
 	while (true) {
@@ -291,7 +291,7 @@ export async function addModelEntriesToProvider(
 	}
 
 	// Added models default to reasoning on (xhigh ceiling); image, context and
-	// max-out come from the probe, then models.dev, then the local rules, then
+	// max-out come from the probe, then models.dev, then
 	// the api fallback, then model-probe's defaults (image off, reasoning on).
 	// Tune per model later via Edit provider → Edit a model.
 	const defaultOpts: ModelOptions = { reasoning: "xhigh", image: true };
@@ -303,7 +303,7 @@ export async function addModelEntriesToProvider(
 			const mergedInfo = resolveModelInfo(id, infoById?.get(id), undefined, api);
 			if (probeInfoSummary(mergedInfo).length > 0) detectedCount++;
 			const override = optionOverrides?.get(id);
-			const opts = override ?? modelOptionsFromProbe(mergedInfo, defaultOpts, id);
+			const opts = override ?? modelOptionsFromProbe(mergedInfo, defaultOpts);
 			models.push(buildModelEntry(id, opts));
 		}
 		p.models = models;
@@ -333,8 +333,8 @@ export async function fetchGatewayWideInfo(
 }
 
 // Build picker items for probed model ids, resolved through the models.dev
-// catalog, the local rules, and defaults. describeProbeInfo only renders values
-// that differ from the defaults, tagged [models.dev] / [local rules] by source.
+// catalog and defaults. Catalog-supplied values are tagged [models.dev];
+// fallback limits are not displayed as model capacities.
 export function probePickerItems(
 	ids: string[],
 	infoById: Map<string, ModelProbeInfo>,
@@ -343,7 +343,7 @@ export function probePickerItems(
 ): ProbeItem[] {
 	return ids.map((id) => {
 		const info = resolveModelInfo(id, infoById.get(id), modelsDev, api);
-		const opts = modelOptionsFromProbe(info, { reasoning: "xhigh", image: false }, id);
+		const opts = modelOptionsFromProbe(info, { reasoning: "xhigh", image: false });
 		return {
 			value: id, label: id,
 			description: [`Default context ${opts.defaultContextWindow}`, describeProbeInfo(info)].filter(Boolean).join(" • "),

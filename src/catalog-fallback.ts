@@ -41,7 +41,7 @@ export async function fillCatalogFallback(
 		try {
 			options = await lookup(id);
 		} catch {
-			// Continue with local rules and defaults when the catalog is unavailable.
+			// Continue with defaults when the catalog is unavailable.
 			continue;
 		}
 		const chosen = preferredCatalogOption(id, options);

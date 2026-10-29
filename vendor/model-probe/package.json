@@ -13,7 +13,6 @@
     "index.ts",
     "cli.ts",
     "src",
-    "rules.json",
     "README.md",
     "LICENSE"
   ],

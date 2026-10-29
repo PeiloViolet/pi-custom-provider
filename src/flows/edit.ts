@@ -483,7 +483,7 @@ async function refreshProviderModels(ctx: CommandContext, providerId: string) {
 	const style = providerStyleOf(provider);
 
 	// Gateway-wide metadata (one call per source) — fetch BEFORE any picker so
-	// it shows real detected values instead of local-rule guesses. Refresh models
+	// it shows detected values before applying defaults. Refresh models
 	// always uses the auto profile.
 	const profile = AUTO_PROBE_PROFILE;
 	let gatewayWide: Map<string, ModelProbeInfo> | undefined;
@@ -497,7 +497,7 @@ async function refreshProviderModels(ctx: CommandContext, providerId: string) {
 		}
 	}
 
-	// models.dev catalog tier — above the local rules, below detected values.
+	// Catalog values fill fields the endpoint did not report.
 	const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
 
 	// Resolve metadata for everything we may touch: new models (to describe and

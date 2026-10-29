@@ -1,5 +1,4 @@
-export { applyKnownModelFallback, normalizeModelIdCandidates, registerKnownModelRules, reloadKnownModelRules } from "./src/known-models.ts";
-export type { KnownModelRule } from "./src/known-models.ts";
+export { normalizeModelIdCandidates } from "./src/model-id.ts";
 export {
 	API_FALLBACK_LIMITS,
 	applyModelDefaults,

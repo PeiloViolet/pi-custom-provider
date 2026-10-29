@@ -152,8 +152,8 @@ export async function probeModels(baseUrl: string, apiKey?: string): Promise<Pro
 	return { ids, infoById, baseUrl: resolvedBaseUrl };
 }
 
-// Protocol-level fallback limits, applied when the gateway, the catalog, and
-// the local rules all say nothing about a model's limits. Reasoning models
+// Protocol-level fallback limits, applied when neither the gateway nor the
+// catalog reports a model's limits. Reasoning models
 // burn far more output than classic 4K-era defaults, so these follow what the
 // providers themselves document. Keyed by the pi model `api` flavor.
 export const API_FALLBACK_LIMITS: Record<string, { contextWindow: number; maxTokens: number }> = {
@@ -177,14 +177,14 @@ export function normalizeModelLimits(contextWindow: number, maxTokens: number): 
 	};
 }
 
-// Field defaults applied when neither the gateway nor the local rules say
+// Field defaults applied when neither the gateway nor the catalog says
 // anything: reasoning on (most current models think), image and video input
 // off (opt-in). contextWindow has no default. Developer-role support is a
 // gateway-level probe and defaults to false as well (see developer-role.ts).
 export const MODEL_INFO_DEFAULTS = { image: false, video: false, reasoning: true } as const;
 
 // Fill still-unknown fields from MODEL_INFO_DEFAULTS, tagging them in
-// defaultedFields. Detected and local-rule values always win.
+// defaultedFields. Detected and catalog values always win.
 export function applyModelDefaults(info: ModelProbeInfo | undefined): ModelProbeInfo {
 	const out: ModelProbeInfo = { ...(info ?? {}) };
 	const defaulted: NonNullable<ModelProbeInfo["defaultedFields"]> = [...(info?.defaultedFields ?? [])];
@@ -252,11 +252,10 @@ function hasProbeInfo(info: ModelProbeInfo | undefined): boolean {
 
 export function describeProbeInfo(info: ModelProbeInfo | undefined): string | undefined {
 	if (!info) return undefined;
-	const inferred = new Set(info.inferredFields ?? []);
 	const fromModelsDev = new Set(info.modelsDevFields ?? []);
 	const defaulted = new Set(info.defaultedFields ?? []);
 	const tag = (field: "contextWindow" | "maxTokens" | "image" | "video" | "reasoning" | "cost") =>
-		inferred.has(field as any) ? " [local rules]" : fromModelsDev.has(field) ? " [models.dev]" : "";
+		fromModelsDev.has(field) ? " [models.dev]" : "";
 	const parts: string[] = [];
 	// Limit fields filled by the api fallback (tagged defaulted) carry no real
 	// information about the model — don't show them.

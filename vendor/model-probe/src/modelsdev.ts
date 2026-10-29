@@ -2,10 +2,8 @@
 // their base URLs) and per-provider model metadata (context window, image,
 // video, reasoning, effort options).
 //
-// In the metadata priority order models.dev sits ABOVE the local known-model
-// rules: a catalog entry is curated per-model data, while a rule is a regex
-// guess. Detected > models.dev > local rule > default. Fields filled from
-// here are tagged in modelsDevFields.
+// Catalog entries fill fields the gateway did not report. Priority:
+// detected > models.dev > defaults. Fields filled here use modelsDevFields.
 //
 // Data comes from the official models.dev SDK (@opencode-ai/models), three
 // sources in order:

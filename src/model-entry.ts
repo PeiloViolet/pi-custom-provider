@@ -49,15 +49,15 @@ function ceilingFromThinkingMap(map: Record<string, string | null>): ReasoningCe
 }
 
 // Turn probe metadata into model knobs. model-probe has already resolved each
-// field (detected > models.dev > local rules > its own defaults: image off,
+// field (detected > models.dev > its own defaults: image off,
 // reasoning on); the wizard fallback only supplies the reasoning ceiling for
 // thinking models. (model-probe also tracks video input, but pi's model config
 // only supports text/image, so it isn't carried into ModelOptions.)
-export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions, modelId = ""): ModelOptions {
+export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions): ModelOptions {
 	if (!info) return fallback;
 	const maximum = info.defaultedFields?.includes("contextWindow")
 		? fallback.maxContextWindow : info.contextWindow ?? fallback.maxContextWindow;
-	const initial = defaultContextWindow(modelId, maximum);
+	const initial = defaultContextWindow(maximum);
 	const opts: ModelOptions = {
 		reasoning: fallback.reasoning,
 		image: info.image ?? fallback.image,
@@ -185,7 +185,7 @@ export function buildProviderConfig(
 			// manually added models, which have no probe info at all.
 			const info = resolveModelInfo(id, infoById?.get(id), undefined, api);
 			const override = optionOverrides?.get(id);
-			const modelOpts = override ?? modelOptionsFromProbe(info, opts, id);
+			const modelOpts = override ?? modelOptionsFromProbe(info, opts);
 			return buildModelEntry(id, modelOpts, ceilingOverrides);
 		}),
 	};
@@ -217,7 +217,7 @@ export function readModelOptions(model: any): ModelOptions {
 		...(Array.isArray(model?.manualFields) ? { manualFields: [...model.manualFields] } : {}),
 		image, contextWindow,
 		maxContextWindow: maximum,
-		defaultContextWindow: defaultContextWindow(modelIdOf(model), maximum),
+		defaultContextWindow: defaultContextWindow(maximum),
 		maxTokens: typeof model?.maxTokens === "number" ? model.maxTokens : undefined,
 		cost: model?.cost,
 	};

@@ -155,7 +155,7 @@ export async function promptModelMetadata(ctx: CommandContext, title: string, in
 // Manual model entry: type an id, land in that model's metadata menu (each
 // field opens its own prompt and returns to the menu), then the next id.
 // Blank enter or esc on the id prompt exits. Starting values come from
-// resolveModelInfo (local rules + defaults — manual ids have no probe data).
+// resolveModelInfo (defaults — manual ids have no probe data).
 // Returns the ids plus every model's confirmed options; null when cancelled
 // with nothing entered.
 export async function promptManualModels(
@@ -192,7 +192,7 @@ export async function promptManualModels(
 						? "openai-responses"
 						: "openai-completions";
 		const resolved = resolveModelInfo(id, undefined, undefined, api);
-		const opts = modelOptionsFromProbe(resolved, { reasoning: "xhigh", image: false }, id);
+		const opts = modelOptionsFromProbe(resolved, { reasoning: "xhigh", image: false });
 		const edited = await promptModelMetadata(ctx, `Edit ${id}`, opts);
 		if (!edited) continue;
 		ids.push(id);
