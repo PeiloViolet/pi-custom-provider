@@ -2,8 +2,6 @@ import { BUILTIN_COLLISION_WARNING, BUILTIN_PROVIDER_IDS, loadModelsConfig } fro
 import { resolveModelInfo } from "../../vendor/model-probe/index.ts";
 import { REASONING_LEVELS } from "../types.ts";
 import { buildModelEntry, modelOptionsFromProbe } from "../model-entry.ts";
-import type { CatalogOption } from "../catalog-fallback.ts";
-import type { ModelProbeInfo } from "../types.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ProviderApi, ProviderStyle, ReasoningCeiling, SelectItem } from "../types.ts";
 import { normalizeEndpoint, slugify, suggestProviderId } from "../url.ts";
 import { selectOne } from "./select.ts";
@@ -151,37 +149,6 @@ export async function promptModelMetadata(ctx: CommandContext, title: string, in
 		if (field === null) return null;
 		if (field === "done") return opts;
 		await editModelMetadataField(ctx, opts, field);
-	}
-}
-
-// Enter accepts the recommended source. Selecting a source row opens the
-// shared editor on a draft; nothing is persisted until the provider is saved.
-export async function promptCatalogFallback(
-	ctx: CommandContext, id: string, candidates: CatalogOption[], recommended: CatalogOption,
-	detected: ModelProbeInfo | undefined, api?: ProviderApi,
-): Promise<{ selected: CatalogOption; options?: ModelOptions } | null> {
-	const ordered = [recommended, ...candidates.filter((candidate) => candidate !== recommended)];
-	const resolvedOptions = (candidate: CatalogOption) => modelOptionsFromProbe(
-		resolveModelInfo(id, detected, new Map([[id, candidate.info]]), api),
-		{ reasoning: "xhigh", image: false }, id,
-	);
-	const summary = (candidate: CatalogOption) => modelMetadataItems(resolvedOptions(candidate))
-		.map((item) => `${item.label}${item.suffix ?? ""}${item.value === "context" ? ` (${item.description})` : ""}`).join(" • ");
-	while (true) {
-		const choice = await selectOne(ctx, `Catalog fallback for ${id}`, [
-			{ value: "accept", label: "Accept recommended", suffix: ` • ${recommended.providerId}/${recommended.key}`, description: `${summary(recommended)}\nEnter to accept; select a source below to edit its settings.` },
-			...ordered.map((candidate, index) => ({
-				value: String(index), label: `${candidate.providerId}/${candidate.key}`,
-				suffix: index === 0 ? " • recommended · edit" : " • edit",
-				description: summary(candidate),
-			})),
-			{ value: "skip", label: "Skip catalog fallback", description: "Keep endpoint values; use local rules/defaults for missing fields" },
-		]);
-		if (choice === null || choice === "skip") return null;
-		if (choice === "accept") return { selected: recommended };
-		const selected = ordered[Number(choice)];
-		const options = await promptModelMetadata(ctx, `Edit ${id} — ${selected.providerId}/${selected.key}`, resolvedOptions(selected));
-		if (options) return { selected, options };
 	}
 }
 

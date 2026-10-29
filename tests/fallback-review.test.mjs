@@ -28,9 +28,9 @@ registerHooks({
   return next(url, context);
  },
 });
-const { promptCatalogFallback, editModelMetadataField } = await import('../src/ui/prompts.ts');
+const { editModelMetadataField } = await import('../src/ui/prompts.ts');
 const { buildProviderConfig, buildModelEntry, readModelOptions } = await import('../src/model-entry.ts');
-const { fillCatalogFallback } = await import('../src/catalog-fallback.ts');
+const { reviewModelEntries } = await import('../src/flows/shared.ts');
 const { defaultContextWindow } = await import('../src/context-window.ts');
 const { diffStoredModel, applyMetaChanges, automaticMetadataFields } = await import('../src/model-metadata.ts');
 
@@ -67,46 +67,46 @@ function scriptedUi(steps, inputs = []) {
  return { ctx, titles, done: () => { assert.equal(queue.length, 0); assert.equal(inputs.length, 0); } };
 }
 
-test('Enter accepts the maker recommendation without opening the editor', async () => {
- const ui = scriptedUi([{ title: 'Catalog fallback', contains: 'Accept recommended' }]);
- const result = await promptCatalogFallback(ui.ctx, 'gpt-test', [relay, native], native, undefined, 'openai-responses');
- assert.equal(result.selected, native);
- assert.equal(result.options, undefined);
+test('all collected models appear together; Done accepts without per-model prompts', async () => {
+ const ui = scriptedUi([{ title: 'Edit models', search: 'Done', contains: 'gpt-second' }]);
+ const result = await reviewModelEntries(ui.ctx, ['gpt-test', 'gpt-second'],
+  new Map([['gpt-test', native.info], ['gpt-second', relay.info]]), 'openai-responses');
+ assert.equal(result.size, 2);
+ assert.equal(result.get('gpt-test').image, true);
+ assert.equal(result.get('gpt-second').image, false);
+ assert.equal(ui.titles.length, 1);
  ui.done();
 });
 
-test('a source row opens shared fields; edited values and clearing survive final config', async () => {
+test('a model row directly opens shared fields; edits survive returning to list and saving', async () => {
  const ui = scriptedUi([
-  { title: 'Catalog fallback', search: 'relay/gpt-test' },
+  { title: 'Edit models', search: 'gpt-test' },
   { title: 'Edit gpt-test', search: 'Image input' },
   { title: 'Image input', search: 'Yes - send' },
   { title: 'Edit gpt-test', search: 'Max output tokens' },
   { title: 'Edit gpt-test', search: 'Done' },
+  { title: 'Edit models', search: 'Done', contains: 'image' },
  ], ['0']);
- const detected = { maxTokens: 8192 };
- const result = await promptCatalogFallback(ui.ctx, 'gpt-test', [relay, native], native, detected, 'openai-responses');
- assert.equal(result.selected, relay);
- assert.equal(result.options.image, true);
- assert.equal(result.options.maxTokens, undefined);
+ const info = new Map([['gpt-test', { ...relay.info, maxTokens: 8192 }]]);
+ const options = await reviewModelEntries(ui.ctx, ['gpt-test'], info, 'openai-responses');
  const config = buildProviderConfig('openai-responses', 'openai-responses', 'https://relay.example/v1',
-  { mode: 'none' }, ['gpt-test'], { reasoning: 'xhigh', image: false }, undefined,
-  new Map([['gpt-test', { ...relay.info, ...detected }]]), undefined, new Map([['gpt-test', result.options]]));
+  { mode: 'none' }, ['gpt-test'], { reasoning: 'xhigh', image: false }, undefined, info, undefined, options);
  assert.deepEqual(config.models[0].input, ['text', 'image']);
  assert.equal(config.models[0].maxTokens, undefined);
- assert.equal(config.baseUrl, 'https://relay.example/v1');
- assert.equal(config.models[0].id, 'gpt-test');
+ assert.deepEqual(config.models[0].manualFields, ['image', 'maxtokens']);
  assert.equal(relay.info.image, false);
  ui.done();
 });
 
-test('unedited fields retain effort mapping and price while a gateway limit remains visible', async () => {
+test('unedited fields retain exact effort mapping, gateway limits and prices', async () => {
  const ui = scriptedUi([
-  { title: 'Catalog fallback', search: 'recommended · edit' },
+  { title: 'Edit models', search: 'gpt-test' },
   { title: 'Edit gpt-test', search: 'Done', contains: '8192' },
+  { title: 'Edit models', search: 'Done' },
  ]);
- const result = await promptCatalogFallback(ui.ctx, 'gpt-test', [relay, native], native,
-  { maxTokens: 8192 }, 'openai-responses');
- const entry = buildModelEntry('gpt-test', result.options);
+ const result = await reviewModelEntries(ui.ctx, ['gpt-test'],
+  new Map([['gpt-test', { ...native.info, maxTokens: 8192 }]]), 'openai-responses');
+ const entry = buildModelEntry('gpt-test', result.get('gpt-test'));
  assert.equal(entry.maxTokens, 8192);
  assert.equal(entry.thinkingLevelMap.low, 'low');
  assert.equal(entry.thinkingLevelMap.medium, null);
@@ -114,24 +114,23 @@ test('unedited fields retain effort mapping and price while a gateway limit rema
  ui.done();
 });
 
-test('Esc discards draft edits and returns to fallback, whose Esc rejects the catalog', async () => {
+test('Esc discards only the current model draft and returns to the common list', async () => {
  const ui = scriptedUi([
-  { title: 'Catalog fallback', search: 'recommended · edit' },
+  { title: 'Edit models', search: 'gpt-test' },
   { title: 'Edit gpt-test', search: 'Image input' },
   { title: 'Image input', search: 'No - text' },
   { title: 'Edit gpt-test', escape: true },
-  { title: 'Catalog fallback', escape: true },
+  { title: 'Edit models', search: 'Done' },
  ]);
- assert.equal(await promptCatalogFallback(ui.ctx, 'gpt-test', [native], native, undefined), null);
- assert.equal(native.info.image, true);
+ const result = await reviewModelEntries(ui.ctx, ['gpt-test'], new Map([['gpt-test', native.info]]), 'openai-responses');
+ assert.equal(result.get('gpt-test').image, true);
+ assert.equal(result.get('gpt-test').manualFields, undefined);
  ui.done();
 });
 
-test('skip explicitly rejects fallback instead of accepting a default', async () => {
- const ui = scriptedUi([{ title: 'Catalog fallback', search: 'Skip catalog fallback' }]);
- const result = await fillCatalogFallback(['gpt-test'], new Map(), async () => [native], undefined,
-  async (id, candidates, recommended) => (await promptCatalogFallback(ui.ctx, id, candidates, recommended))?.selected);
- assert.equal(result.has('gpt-test'), false);
+test('Esc in the common model list cancels adding without accepting drafts', async () => {
+ const ui = scriptedUi([{ title: 'Edit models', escape: true }]);
+ assert.equal(await reviewModelEntries(ui.ctx, ['gpt-test'], new Map([['gpt-test', native.info]]), 'openai-responses'), null);
  ui.done();
 });
 

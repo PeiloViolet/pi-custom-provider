@@ -14,7 +14,9 @@ import { resolveApiKeyForProbe, serializeApiKey } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, removeProviderApiKey, saveModelsConfig, saveProviderApiKey } from "../config.ts";
 import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
-import { fillCatalogFallback, type CatalogReview } from "../catalog-fallback.ts";
+import { fillCatalogFallback } from "../catalog-fallback.ts";
+import { promptModelMetadata } from "../ui/prompts.ts";
+import { selectOne } from "../ui/select.ts";
 import type { GatewayProbeProfile } from "../presets.ts";
 import type {
 	ApiKeyMode,
@@ -140,6 +142,29 @@ export function providerModelItems(provider: any): SelectItem[] {
 			};
 		})
 		.filter((item: any): item is SelectItem => item !== null);
+}
+
+// Review all collected models in the same list used by Edit per model. Opening
+// a row edits a draft; only Done returns the options for provider persistence.
+export async function reviewModelEntries(
+	ctx: CommandContext, ids: string[], infoById: Map<string, ModelProbeInfo>, api: ProviderApi,
+): Promise<Map<string, ModelOptions> | null> {
+	const options = new Map(ids.map((id) => [id, modelOptionsFromProbe(
+		resolveModelInfo(id, infoById.get(id), undefined, api), { reasoning: "xhigh", image: false }, id,
+	)]));
+	let cursor = 0;
+	while (true) {
+		const items = providerModelItems({ models: ids.map((id) => buildModelEntry(id, options.get(id)!)) });
+		const choice = await selectOne(ctx, "Edit models", [
+			...items,
+			{ value: "\u0000done", label: "Done", description: "Use these models and save the provider" },
+		], { initialIndex: cursor });
+		if (choice === null) return null;
+		if (choice === "\u0000done") return options;
+		cursor = items.findIndex((item) => item.value === choice);
+		const edited = await promptModelMetadata(ctx, `Edit ${choice}`, options.get(choice)!);
+		if (edited) options.set(choice, edited);
+	}
 }
 
 function normalizeStoredEndpoint(provider: any): string {
@@ -338,7 +363,6 @@ export async function collectProbedModelInfo(
 	// The provider's api flavor — enables model-probe's protocol-level
 	// fallback limits when nothing else knows them.
 	api?: ProviderApi,
-	reviewFallback?: CatalogReview,
 ): Promise<Map<string, ModelProbeInfo>> {
 	ctx.ui.notify("Fetching model metadata (context, max-out, image/video, reasoning) ...", "info");
 	const profile = AUTO_PROBE_PROFILE;
@@ -355,16 +379,14 @@ export async function collectProbedModelInfo(
 		details = await fetchPerModelInfo(baseUrl, ids, { apiKey: resolvedKey });
 	}
 
-	// Review the effective values, including gateway limits, before saving a
-	// catalog fallback. Explicit edits are retained by the add flow separately.
+	// Resolve catalog fallback below gateway values. The add flow reviews the
+	// complete model list after all metadata has been collected.
 	const detected = new Map<string, ModelProbeInfo>();
 	for (const map of [listInfo, gw, details]) {
 		for (const [id, info] of map) detected.set(id, { ...detected.get(id), ...info });
 	}
 	const dev = profile.modelsDev && style !== "ollama"
-		? await fetchAutomaticCatalogInfo(ctx, baseUrl, ids, modelsDev, reviewFallback
-			? (id, options, recommended) => reviewFallback(id, options, recommended, detected.get(id))
-			: undefined)
+		? await fetchAutomaticCatalogInfo(ctx, baseUrl, ids, modelsDev)
 		: modelsDev;
 	return finalizeModelInfo(ids, [detected], { modelsDev: dev, api });
 }
@@ -399,12 +421,11 @@ export async function fetchAutomaticCatalogInfo(
 	baseUrl: string,
 	ids: string[],
 	matched?: Map<string, ModelProbeInfo>,
-	review?: CatalogReview,
 ): Promise<Map<string, ModelProbeInfo>> {
 	const endpointInfo = matched ?? await fetchModelsDevInfoForBaseUrl(baseUrl);
 	return fillCatalogFallback(ids, endpointInfo, fetchModelsDevOptionsForModel, (id, option) => {
 		ctx.ui.notify(`${id}: metadata from models.dev (${option.providerId}/${option.key}).`, "info");
-	}, review);
+	});
 }
 
 // Look up every models.dev catalog entry matching a model id, across all
