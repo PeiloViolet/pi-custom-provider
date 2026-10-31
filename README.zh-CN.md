@@ -46,8 +46,10 @@ provider——无需手工编辑配置文件。
 ## 安装
 
 ```powershell
-pi install git:github.com/PeiloViolet/pi-custom-provider@v1.6.0-fix.2
+pi install git:github.com/PeiloViolet/pi-custom-provider@master
 ```
+
+此命令安装 `master` 上最新合并的修复。如果之前安装时固定了旧标签，重新执行同一命令即可将已有包切换到 `master`。然后在 Pi 中执行 `/reload`，再重新打开 `/custom-provider`。
 
 本 fork 通过 GitHub 分发，尚未发布到 npm。若已安装原版，请先执行 `pi remove npm:better-custom-provider`，避免重复注册 `/custom-provider`。
 
@@ -64,8 +66,8 @@ pi install git:github.com/PeiloViolet/pi-custom-provider@v1.6.0-fix.2
    选 none)、多选模型。元数据全部来自目录。
 2. **自定义端点** —— 选择 provider 类型,输入端点地址、名称、API key,
    然后:
-   - **自动探测** —— 探测 `/models` + 元数据来源,多选模型并内联显示
-     元数据;或
+   - **自动探测** —— 获取模型列表，选择阶段只显示模型名称；选完后
+     查询元数据，并进入 **Edit models** 统一检查和编辑；或
    - **手动添加** —— 输入 id,进入该模型的元数据菜单(reasoning / 图像
      输入 / 上下文窗口 / 最大输出 token),确认后输入下一个 id;留空或
      esc 结束。

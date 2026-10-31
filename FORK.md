@@ -5,8 +5,10 @@ This fork preserves better-custom-provider 1.6.0's /custom-provider wizard and v
 ## Install on another computer
 
 ```powershell
-pi install git:github.com/PeiloViolet/pi-custom-provider@v1.6.0-fix.2
+pi install git:github.com/PeiloViolet/pi-custom-provider@master
 ```
+
+This tracks the merged fixes on `master`. For an existing tag-pinned installation, run the same command to replace the configured ref with `master`, then run `/reload` in Pi before reopening `/custom-provider`.
 
 Remove or disable the original better-custom-provider first (use `pi list` to find its exact source, then `pi remove <source>`), because both register /custom-provider. Restart Pi and run /custom-provider. Choose OpenAI-compatible, enter your endpoint and API key, then Auto-detect. Credentials stay on that computer; this repository contains no credentials or personal model configuration.
 

@@ -49,8 +49,10 @@ LLM providers — no hand-editing of config files required.
 ## Install
 
 ```powershell
-pi install git:github.com/PeiloViolet/pi-custom-provider@v1.6.0-fix.2
+pi install git:github.com/PeiloViolet/pi-custom-provider@master
 ```
+
+This installs the latest merged fixes from `master`. If you previously installed a pinned tag, run the same command to switch the existing package to `master`. Then run `/reload` in Pi before reopening `/custom-provider`.
 
 This fork is distributed through GitHub, not npm. Remove the original with `pi remove npm:better-custom-provider` first if installed, to avoid duplicate `/custom-provider` commands.
 
@@ -67,8 +69,8 @@ or **Delete provider**.
    (or none), multi-select models. Metadata comes from the catalog.
 2. **Custom endpoint** — pick the provider style, enter the endpoint URL, name
    it, enter the API key, then:
-   - **Auto-detect from the endpoint** — probe `/models` + metadata sources,
-     multi-select models with metadata shown inline; or
+   - **Auto-detect from the endpoint** — fetch the model list and select model
+     names only, then collect metadata and review it in **Edit models**; or
    - **Add manually** — type an id, adjust its metadata menu (reasoning / image
      / context window / max output), confirm, next id; blank or esc finishes.
 
